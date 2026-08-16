@@ -1,0 +1,4 @@
+# dsh-taskify bundle patch: insert the plugin into the web profile layer stack.
+- insert:
+    - id: dsh-taskify
+      name: 'dsh-taskify'
