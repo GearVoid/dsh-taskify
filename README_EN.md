@@ -8,6 +8,22 @@ DSH Taskify turns rough, ambiguous, or unstructured input into a task specificat
 
 The refined task is written back to the composer and is **never submitted automatically**.
 
+![DSH Taskify demo: refine and undo a task](./assets/demo.gif)
+
+## One-line installation
+
+```sh
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.1.0
+```
+
+Then start or restart DeepSeek Harness Web:
+
+```sh
+dsh web
+```
+
+The “Refine Task” button appears on the right side of the composer, before the model selector and send button. The `v0.1.0` tag pins the installed source so future repository changes cannot silently replace it.
+
 ## Features
 
 - **One-click task refinement**
@@ -33,19 +49,6 @@ The refined task is written back to the composer and is **never submitted automa
 
 - **Current model reuse**
   Uses the model selected by the current session whenever possible. No additional API key is required.
-
-## Installation
-
-Run the following commands from the directory containing this project:
-
-```sh
-dsh plugin --profile web add ./dsh-taskify
-dsh web
-```
-
-Restart DeepSeek Harness Web after installation.
-
-The “Refine Task” button will appear on the right side of the composer, before the model selector and send button.
 
 ## Usage
 

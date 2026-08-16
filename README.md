@@ -8,6 +8,22 @@ DSH Taskify 可以把零散、模糊或结构混乱的输入，整理成 Coding 
 
 它只会把结果回填到输入框，**不会自动发送任务**。
 
+![DSH Taskify 演示：完善任务并撤回](./assets/demo.gif)
+
+## 一行安装
+
+```sh
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.1.0
+```
+
+然后启动或重启 DeepSeek Harness Web：
+
+```sh
+dsh web
+```
+
+“完善任务”按钮会出现在输入框右侧、模型选择器和发送按钮之前。版本标签锁定为 `v0.1.0`，不会随仓库后续提交静默变化。
+
 ## 主要功能
 
 - **一键完善任务**
@@ -33,19 +49,6 @@ DSH Taskify 可以把零散、模糊或结构混乱的输入，整理成 Coding 
 
 - **复用当前模型**
   优先使用当前会话选择的模型，不要求配置额外的 API Key。
-
-## 安装
-
-在包含本项目目录的位置执行：
-
-```sh
-dsh plugin --profile web add ./dsh-taskify
-dsh web
-```
-
-安装后重新启动 DeepSeek Harness Web。
-
-“完善任务”按钮会出现在输入框右侧、模型选择器和发送按钮之前。
 
 ## 使用方法
 
