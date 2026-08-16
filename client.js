@@ -748,9 +748,9 @@ var CSS = `
   display: inline;
 }
 .dsh-taskify-icon {
-  display: block;
-  width: 14px;
-  height: 14px;
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
   flex: none;
 }
 `;
@@ -776,22 +776,7 @@ function useTaskifySession(sessionId) {
   return import_react.default.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 function TaskifyIcon() {
-  return /* @__PURE__ */ import_react.default.createElement(
-    "svg",
-    {
-      className: "dsh-taskify-icon",
-      viewBox: "0 0 16 16",
-      fill: "none",
-      stroke: "currentColor",
-      strokeWidth: "1.5",
-      strokeLinecap: "round",
-      strokeLinejoin: "round",
-      "aria-hidden": "true"
-    },
-    /* @__PURE__ */ import_react.default.createElement("path", { d: "M8 1.75 8.75 4 11 4.75 8.75 5.5 8 7.75 7.25 5.5 5 4.75 7.25 4Z" }),
-    /* @__PURE__ */ import_react.default.createElement("path", { d: "m5.25 7.25.95 2.55 2.55.95-2.55.95-.95 2.55-.95-2.55-2.55-.95 2.55-.95Z" }),
-    /* @__PURE__ */ import_react.default.createElement("path", { d: "m12.25 8.5.45 1.05 1.05.45-1.05.45-.45 1.05-.45-1.05-1.05-.45 1.05-.45Z" })
-  );
+  return /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-icon", "aria-hidden": "true" }, "\u2728");
 }
 function iconFor(state, busy) {
   if (busy) return /* @__PURE__ */ import_react.default.createElement(TaskifyIcon, null);
