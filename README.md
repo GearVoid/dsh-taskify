@@ -2,11 +2,19 @@
 
 **简体中文** | [English](./README_EN.md)
 
-## 在 Agent 执行前，把你明确说过的边界锚定下来
+## Agent 能完成任务，不代表它不会越界
 
-DSH Taskify 是面向 DeepSeek Harness Web 的轻量级 **Intent Anchor** 插件。它从当前输入中提取少量、明确、可追溯的硬约束，同时完整保留用户原文。
+“后端别动”、“功能别删”、“API 保持不变”、“不要新增依赖”——这些边界经常埋在自然语言里，执行过程中很容易被淹没。
 
-> Raw Prompt is the source of truth. Extract, don't invent.
+DSH Taskify 不重写你的 Prompt。它只把你明确说过的硬约束提取成可审阅的 **Intent Anchors**，和原始任务一起交给 Agent。
+
+> 把 dashboard 做好看点，后端别动，功能别删，也不要增加新的依赖。
+
+```text
+🔒 后端不修改　 🔒 保留现有功能　 🔒 不新增依赖
+```
+
+**原文一字不改。Taskify 只把底线单独钉住。**
 
 ### 原始任务 → 🔒 Constraint Chips → Send
 
@@ -16,6 +24,20 @@ DSH Taskify 是面向 DeepSeek Harness Web 的轻量级 **Intent Anchor** 插件
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
+
+## 问题不是 Agent 看不懂，而是约束会漂移
+
+传统 Prompt Enhancer 会重写整段输入。Taskify 保留原始任务，只给明确约束增加一条可见、可追溯的发送路径：
+
+```text
+原始任务 ─────────────────────────→ Agent
+    │
+    └─ 🔒 明确约束（附原文证据）──→ Agent
+```
+
+Taskify 不替 Agent 决定怎么做，也不替用户补写需求。没有明确硬约束时，它会直接 No-op。
+
+> Raw Prompt is the source of truth. Extract, don't invent.
 
 ## 一行安装
 
