@@ -2,21 +2,25 @@
 
 **简体中文** | [English](./README_EN.md)
 
-## 把随手一句需求，变成 Coding Agent 可以直接执行的任务
+## 在 Agent 执行前，把你明确说过的边界锚定下来
 
-一个面向 DeepSeek Harness Web 的轻量级 **Task Compiler**。它不负责把 Prompt 写得更漂亮，而是让任务更容易被 Agent 正确执行。
+DSH Taskify 是面向 DeepSeek Harness Web 的轻量级 **Intent Anchor** 插件。它从当前输入中提取少量、明确、可追溯的硬约束，同时完整保留用户原文。
 
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek_Harness-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
+> Raw Prompt is the source of truth. Extract, don't invent.
+
+### 原始任务 → 🔒 Constraint Chips → Send
+
+![DSH Taskify v0.2：从原始任务提取只读约束并发送](./assets/demo.gif)
+
+[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
 
-![DSH Taskify 演示：完善任务并撤回](./assets/demo.gif)
-
 ## 一行安装
 
 ```sh
-dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.1.0
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.2.0
 ```
 
 然后启动或重启 DeepSeek Harness Web：
@@ -25,133 +29,119 @@ dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.1.0
 dsh web
 ```
 
-“完善任务”按钮会出现在输入框右侧、模型选择器和发送按钮之前。
+## 使用效果
 
-| ✨ 一键完善 | 🔒 Literal Lock | ↶ 随时撤回 | 🧠 有限上下文 |
-| --- | --- | --- | --- |
-| 整理当前草稿 | 保护代码与路径 | 恢复原始输入 | 理解最近对话 |
+输入：
 
-## Before → After
+> dashboard 太乱了，帮我整理下，后端别动，功能也别删。
 
-### Before
-
-> 这个 dashboard 看着有点乱，帮我整理下，后端别动，功能也别删。
-
-### After
+点击 `✨ Taskify` 后，输入框内容保持不变，附近显示只读 Chips：
 
 ```text
-目标
-优化当前 Dashboard 的前端信息层级和视觉秩序。
-
-需要处理
-- 调整布局、间距、对齐、字号与颜色层级
-- 优先复用现有组件和设计变量
-- 保持现有交互入口清晰可见
-
-约束
-- 不修改后端接口、业务逻辑或数据结构
-- 不删除或改变现有功能
-- 不进行无关页面改动
-
-验收标准
-- 主要信息层级清晰，关键操作易于识别
-- 页面在现有断点下正常显示
-- 原有功能与交互保持可用
+🔒 不修改后端
+🔒 保留现有功能
 ```
 
-## Why Taskify?
+悬停或聚焦 Chip 可检查原文证据：
 
-### 不是普通的 Prompt 润色器
+```text
+来源：“后端别动”
+```
 
-Taskify 面向 Coding Agent 的执行过程整理目标、范围、约束和验收标准，并根据草稿清晰度控制结构与细节。
+如果当前输入没有明确硬约束，Taskify 会正常显示：
 
-### Literal Lock
-
-发送给模型前，代码块、行内代码、文件路径、URL、IP/端口、环境变量、版本号、CLI 参数和常见代码标识符会被临时锁定。返回后只有通过数量与顺序校验的结果才会恢复并写回。
-
-### Safe by default
-
-完善结果只回填输入框，绝不自动发送。请求期间如果草稿发生变化，旧结果不会覆盖新内容；应用后可以一键撤回到原始草稿。
-
-## 更多能力
-
-- **有限上下文**：可使用当前会话最近的少量已完成消息理解“这个页面”或“上一处修改”等指代，不读取工作区或搜索代码仓库。
-- **Slash 命令保留**：`/plan` 等命令前缀保持不变，只完善命令后的任务正文。
-- **复用当前模型**：优先使用当前会话选择的模型，不要求配置额外 API Key。
-- **取消与重试**：完善过程中可以取消，失败后可以直接重试并查看错误提示。
-- **Session 隔离**：请求、撤回点和错误状态按会话隔离。
-
-## 使用方法
-
-1. 在输入框写下任务草稿。
-2. 点击“✨ 完善任务”。
-3. 检查自动回填的任务规格。
-4. 手动发送，或点击“↶ 撤回”恢复原文。
-
-## 按钮状态
-
-| 状态 | 行为 |
-| --- | --- |
-| 空输入 | “完善任务”不可用 |
-| 可完善 | 点击后开始整理当前草稿 |
-| 完善中 | 显示静态 `✨` 和“完善中…”，点击可取消 |
-| 已应用 | 点击“撤回”恢复原始草稿 |
-| 应用后编辑 | 可以再次完善 |
-| 失败 | 显示错误提示，可以重试 |
+```text
+✓ 未发现需要额外锚定的约束
+```
 
 ## 工作方式
 
 ```text
-当前草稿
+当前用户草稿
    ↓
-解析 Slash 命令
+解析 Slash 命令正文
    ↓
 保护代码、路径和其他字面量
    ↓
-结合有限的最近对话
+使用当前会话模型提取 Anchor + Evidence
    ↓
-调用当前会话模型
+校验证据、约束强度与具体代码事实
    ↓
-校验并恢复受保护内容
+显示只读 Chips（原文不变）
    ↓
-确认草稿没有被用户修改
+用户手动发送
    ↓
-回填输入框（不会自动发送）
+Raw Prompt + User-level Taskify Constraint Contract
 ```
 
-## 安全与隐私
+Taskify 不读取最近对话来恢复旧约束，不搜索工作区，也不生成目标、计划、验收标准或工程建议。
 
-- 不读取工作区文件或搜索代码仓库
-- 不读取 `.env`、SSH Key 或本地凭据文件
-- 不访问额外的第三方服务
-- 不自动发送或提交完善后的任务
-- 最近对话仅保留有限文本，并过滤常见凭据形状
-- 包含 Reference Chip 的草稿在当前版本中不会被完善
+## Anchor Contract
+
+```json
+{
+  "anchors": [
+    {
+      "text": "不修改后端",
+      "evidence": "后端别动"
+    }
+  ]
+}
+```
+
+每个 Anchor 必须能追溯到当前用户草稿中的精确 evidence。`尽量简单`、`最好别碰后端` 等偏好性或弱化表达不会被升级为硬约束。`anchors: []` 是合法成功结果。
+
+## 发送给 Agent
+
+用户仍通过 DSH 原有发送按钮手动发送。原始消息保持原样；当消息与已锚定草稿精确匹配时，Taskify 通过 DSH 官方 `agent/pre-step` 扩展点追加一条用户角色、插件来源的消息：
+
+```xml
+<taskify_constraints>
+- 不修改后端
+- 保留现有功能
+</taskify_constraints>
+```
+
+约束不会进入 System Prompt，也不会获得高于用户原话的指令权限。无 Anchor 时不附加空模板。
+
+## 安全与状态
+
+- **Literal Lock**：保护代码块、行内代码、路径、URL、IP/端口、版本、CLI 和常见标识符。
+- **Provenance**：evidence 必须是当前草稿的精确子串。
+- **Concrete Claim Guard**：Anchor 不能凭空加入新路径、URL、CLI、版本或明显代码标识符。
+- **Revision / Race Protection**：请求期间草稿变化会丢弃旧结果并清理 Host 状态。
+- **只读 Chips**：不编辑、不删除；修改 Raw Prompt 会立即使 Chips 失效。
+- **Cancel / Retry**：提取中可取消，失败后可重试。
+- **Session 隔离**：请求和 Anchor 按会话隔离；成功注入后一次性消费。
+- **Reference 安全策略**：含 Reference Chip 的草稿暂不提取约束。
 
 ## 兼容性
 
-- 已在 DeepSeek Harness `0.1.0-rc.6` 上验证
-- Web Profile
-- 不修改 DeepSeek Harness 本体或 Agent Preset
+- DeepSeek Harness 启动器：`0.1.1-rc.2`
+- DSH 核心插件 API：`0.1.0-rc.6`
+- DSH Web Client API：`0.0.1-rc.1`
+- Node.js：`^22.19.0 || >=24.0.0`
+- pnpm：`11.x`（本仓库使用 `11.19.0`）
 
-DeepSeek Harness 仍处于快速迭代阶段，后续版本可能需要同步适配。
+DSH 仍处于 Developer Preview，存在兼容性破坏的可能。
 
 ## 开发与测试
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm test
 pnpm build
+pnpm pack:check
 ```
 
-测试覆盖 Literal Lock、路径和 URL、Slash 命令、取消、草稿竞态、Provider 错误、输出截断、撤回、Session 隔离、Reference Chip 策略和安全回填。
+测试覆盖 Anchor 提取结果校验、无凭据约束拒绝、模态强度保护、Literal preservation、Empty Anchor、Provenance、无 Prompt Rewrite、草稿竞态、取消、Session 隔离和 User-level Contract 注入。
 
 ## 项目结构
 
 ```text
-src/host/       模型调用与 Host 服务
-src/client/     输入框按钮、交互状态与 RPC
-src/shared/     Literal Lock、上下文、Schema 和 Session Runner
+src/host/       模型调用、Anchor 激活与 Agent 注入
+src/client/     Taskify 按钮、只读 Chips 与草稿失效逻辑
+src/shared/     Compiler、Literal Lock、Schema、Slash 和 Session Runner
 scripts/        Client Bundle 构建脚本
 test/           Node.js 测试
 client.js       构建后的浏览器端 Bundle

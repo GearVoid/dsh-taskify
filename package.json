@@ -1,7 +1,7 @@
 {
   "name": "dsh-taskify",
-  "version": "0.1.0",
-  "description": "Task Compiler plugin for DeepSeek Harness Web: turn a rough composer draft into a minimum necessary executable task specification.",
+  "version": "0.2.0",
+  "description": "Intent Anchor plugin for DeepSeek Harness Web: extract reviewable, provenance-backed constraints without rewriting the user's draft.",
   "type": "module",
   "main": "src/host/index.js",
   "exports": {
@@ -50,13 +50,18 @@
   "devDependencies": {
     "esbuild": "^0.25.0"
   },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "packageManager": "pnpm@11.19.0",
   "license": "MIT",
   "keywords": [
     "deepseek",
     "dsh",
     "deepseek-harness",
     "plugin",
-    "task-compiler",
+    "intent-anchor",
+    "constraint-extraction",
     "dsh-plugin"
   ]
 }
