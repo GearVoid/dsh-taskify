@@ -2,21 +2,25 @@
 
 [简体中文](./README.md) | **English**
 
-## Turn rough requests into agent-ready tasks
+## Anchor explicit boundaries before the agent executes
 
-A lightweight **Task Compiler** for DeepSeek Harness Web. It does not make prompts prettier—it makes tasks easier for coding agents to execute correctly.
+DSH Taskify is a lightweight **Intent Anchor** plugin for DeepSeek Harness Web. It extracts a small set of explicit, reviewable hard constraints from the current draft while leaving the user's original text untouched.
 
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek_Harness-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
+> Raw Prompt is the source of truth. Extract, don't invent.
+
+### Raw task → 🔒 Constraint Chips → Send
+
+![DSH Taskify v0.2 extracts read-only constraints before send](./assets/demo.gif)
+
+[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
 
-![DSH Taskify demo: refine and undo a task](./assets/demo.gif)
-
-## One-line installation
+## Install
 
 ```sh
-dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.1.0
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.2.0
 ```
 
 Then start or restart DeepSeek Harness Web:
@@ -25,126 +29,105 @@ Then start or restart DeepSeek Harness Web:
 dsh web
 ```
 
-The “Refine Task” action appears on the right side of the composer, before the model selector and send button.
+## What it does
 
-| ✨ One click | 🔒 Literal Lock | ↶ Undo anytime | 🧠 Limited context |
-| --- | --- | --- | --- |
-| Refine the draft | Protect code and paths | Restore the original | Understand recent turns |
+Given:
 
-## Before → After
+> This dashboard is messy. Clean it up, but don't touch the backend or remove any features.
 
-### Before
-
-> This dashboard feels messy. Clean it up, but don't touch the backend or remove any features.
-
-### After
+Clicking `✨ Taskify` leaves the composer unchanged and displays read-only chips nearby:
 
 ```text
-Objective
-Improve the Dashboard's frontend information hierarchy and visual organization.
-
-Work to perform
-- Adjust layout, spacing, alignment, typography, and color hierarchy
-- Reuse existing components and design tokens where possible
-- Keep current interaction entry points clearly visible
-
-Constraints
-- Do not modify backend APIs, business logic, or data structures
-- Do not remove or change existing functionality
-- Avoid unrelated changes to other pages
-
-Acceptance criteria
-- Primary information hierarchy is clear and key actions are easy to identify
-- The page renders correctly at existing breakpoints
-- Existing functionality and interactions remain operational
+🔒 Do not modify the backend
+🔒 Preserve existing features
 ```
 
-## Why Taskify?
-
-### Not a generic prompt beautifier
-
-Taskify structures objectives, scope, constraints, and acceptance criteria for coding-agent execution, with detail adjusted to the clarity of the draft.
-
-### Literal Lock
-
-Before the model call, code blocks, inline code, file paths, URLs, IP addresses and ports, environment variables, versions, CLI flags, and common identifiers are temporarily locked. Only results that pass count and order validation are restored and written back.
-
-### Safe by default
-
-The refined task is written back to the composer and never submitted automatically. If the draft changes during a request, the stale result cannot overwrite it; an applied result can be undone with one click.
-
-## More capabilities
-
-- **Limited context**: Uses a small number of recent completed messages to understand references such as “this page” or “the previous change”, without reading the workspace or searching the repository.
-- **Slash command preservation**: Keeps prefixes such as `/plan` unchanged and refines only the task body.
-- **Current model reuse**: Prefers the model selected by the current session, with no additional API key required.
-- **Cancel and retry**: In-progress requests can be cancelled and failures can be retried with visible error feedback.
-- **Session isolation**: Requests, undo checkpoints, and errors are isolated by session.
-
-## Usage
-
-1. Enter a rough task in the composer.
-2. Click “✨ Refine Task”.
-3. Review the task specification written back to the composer.
-4. Submit it manually, or click “↶ Undo” to restore the original draft.
-
-## Button states
-
-| State | Behavior |
-| --- | --- |
-| Empty input | The refine action is disabled |
-| Ready | Click to refine the current draft |
-| Refining | Shows a static `✨` and can be clicked to cancel |
-| Applied | Click “Undo” to restore the original draft |
-| Edited after apply | The task can be refined again |
-| Failed | Shows an error message and allows retrying |
-
-## How it works
+Hover or focus a chip to inspect its exact source evidence. A draft with no explicit hard boundary is a valid no-op:
 
 ```text
-Current draft
+✓ No additional constraints found
+```
+
+## Flow
+
+```text
+Current user draft
    ↓
-Parse Slash command
+Parse the Slash command body
    ↓
 Protect code, paths, and other literals
    ↓
-Add limited recent conversation context
+Extract Anchor + Evidence with the current session model
    ↓
-Call the current session model
+Validate provenance, modality, and concrete code claims
    ↓
-Validate and restore protected literals
+Display read-only chips without rewriting the draft
    ↓
-Verify that the draft has not changed
+The user sends manually
    ↓
-Write back to the composer without submitting
+Raw Prompt + user-level Taskify Constraint Contract
 ```
 
-## Security and privacy
+Taskify does not recover constraints from conversation history, search the workspace, or generate goals, plans, acceptance criteria, and generic engineering advice.
 
-- Does not read workspace files or search the repository
-- Does not read `.env`, SSH keys, or local credential files
-- Does not contact additional third-party services
-- Does not automatically submit refined tasks
-- Keeps only limited recent conversation text and filters common credential patterns
-- Drafts containing reference chips are not refined in the current version
+## Anchor contract
+
+```json
+{
+  "anchors": [
+    {
+      "text": "Do not modify the backend",
+      "evidence": "don't touch the backend"
+    }
+  ]
+}
+```
+
+Every anchor requires exact evidence from the current draft. Preferences and softened language such as “try to” or “ideally” are not promoted to hard constraints. `anchors: []` is a valid success.
+
+## Agent delivery
+
+The user still sends through DSH's normal button. When that human message exactly matches the anchored draft, Taskify uses the official `agent/pre-step` extension point to append a user-role, plugin-sourced message:
+
+```xml
+<taskify_constraints>
+- Do not modify the backend
+- Preserve existing features
+</taskify_constraints>
+```
+
+The contract never enters the System Prompt and has no higher authority than the user's text. No empty template is sent for a no-op.
+
+## Safety and state
+
+- **Literal Lock** protects code, paths, URLs, IP/ports, versions, CLI tokens, and identifiers.
+- **Provenance** requires evidence to be an exact substring of the current draft.
+- **Concrete Claim Guard** rejects newly invented paths, URLs, CLI tokens, versions, and obvious identifiers.
+- **Revision / race protection** discards stale responses and clears Host state after draft edits.
+- **Read-only chips** cannot be edited or deleted; editing the raw draft invalidates them.
+- **Cancel, retry, and session isolation** remain supported.
+- Drafts containing Reference Chips are not extracted in this release.
 
 ## Compatibility
 
-- Tested with DeepSeek Harness `0.1.0-rc.6`
-- Web Profile
-- Does not modify DeepSeek Harness itself or its Agent Presets
+- DeepSeek Harness launcher: `0.1.1-rc.2`
+- DSH core plugin API: `0.1.0-rc.6`
+- DSH Web Client API: `0.0.1-rc.1`
+- Node.js: `^22.19.0 || >=24.0.0`
+- pnpm: `11.x` (this repository uses `11.19.0`)
 
-DeepSeek Harness is evolving quickly, so future releases may require compatibility updates.
+DSH remains in Developer Preview and may introduce breaking changes.
 
 ## Development
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm test
 pnpm build
+pnpm pack:check
 ```
 
-The test suite covers Literal Lock, paths and URLs, Slash commands, cancellation, draft races, provider failures, truncated output, undo behavior, session isolation, reference handling, and safe result application.
+The suite covers extraction-result validation, invented-constraint rejection, modality protection, literal preservation, empty anchors, provenance, no prompt rewrite, draft races, cancellation, session isolation, and user-level contract injection.
 
 ## License
 

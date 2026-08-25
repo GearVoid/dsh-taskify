@@ -1,5 +1,7 @@
 node_modules/
+.pnpm-store/
 *.log
 *.tgz
 .DS_Store
 Thumbs.db
+CODEX_V0.2_DEVELOPMENT_PROMPT.md
