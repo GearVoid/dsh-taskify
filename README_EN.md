@@ -2,11 +2,19 @@
 
 [简体中文](./README.md) | **English**
 
-## Anchor explicit boundaries before the agent executes
+## An agent can complete the task and still cross your boundaries
 
-DSH Taskify is a lightweight **Intent Anchor** plugin for DeepSeek Harness Web. It extracts a small set of explicit, reviewable hard constraints from the current draft while leaving the user's original text untouched.
+“Don't touch the backend.” “Keep every feature.” “Leave the API unchanged.” “Add no dependencies.” These boundaries are often buried in natural language and can get lost during execution.
 
-> Raw Prompt is the source of truth. Extract, don't invent.
+DSH Taskify does not rewrite your prompt. It extracts only the hard constraints you explicitly stated, presents them as reviewable **Intent Anchors**, and sends them alongside the original task.
+
+> Make the dashboard look better. Don't touch the backend, don't remove any features, and don't add new dependencies.
+
+```text
+🔒 Do not modify the backend　 🔒 Preserve existing features　 🔒 Add no dependencies
+```
+
+**Your original words stay untouched. Taskify pins the boundaries separately.**
 
 ### Raw task → 🔒 Constraint Chips → Send
 
@@ -16,6 +24,20 @@ DSH Taskify is a lightweight **Intent Anchor** plugin for DeepSeek Harness Web. 
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
+
+## The problem isn't comprehension. It's constraint drift.
+
+Traditional prompt enhancers rewrite the whole input. Taskify preserves the raw task and gives each explicit constraint a visible, traceable path to the agent:
+
+```text
+Raw task ───────────────────────────────→ Agent
+    │
+    └─ 🔒 Explicit constraint + evidence → Agent
+```
+
+Taskify does not decide how the agent should work or add requirements for the user. When no explicit hard constraint exists, it simply does nothing.
+
+> Raw Prompt is the source of truth. Extract, don't invent.
 
 ## Install
 
