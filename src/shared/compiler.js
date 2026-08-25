@@ -1,110 +1,159 @@
 /**
- * Frozen v0.1 Task Compiler prompt contract.
+ * Frozen v0.2 constraint-extraction contract and result validation.
  */
 
-export const COMPILER_SYSTEM_PROMPT = `You are Task Compiler, an input compiler for an AI coding agent.
+import { lockLiterals, makeSentinel, unlockResult, UNKNOWN_SENTINEL_RE } from './literal-lock.js'
 
-Your job is NOT to make the user's writing sound more professional.
+export const COMPILER_SYSTEM_PROMPT = `You are Taskify, a constraint extractor for an AI coding agent.
 
-Your job is to transform the user's draft into a task that an autonomous coding agent can execute correctly with minimum ambiguity.
+Analyze ONLY the text inside <current_user_draft>. Ignore all conversation history.
 
-CORE PRINCIPLES
+Extract only hard boundaries the user explicitly states in this draft. A hard boundary is a clear prohibition, mandatory preservation rule, or explicit restriction such as "do not modify the backend", "keep the API unchanged", "only analyze; do not edit code", or "do not add dependencies".
 
-1. Preserve the user's actual intent.
-2. Do not invent business requirements, technical facts, filenames, APIs, constraints, or desired behavior that the user did not provide or that cannot be safely inferred.
-3. The clearer the original task is, the less you should change it.
-4. A short and precise task is better than a long generic prompt.
-5. Do not add generic role-playing text such as:
-   "You are a senior software engineer..."
-6. Do not add motivational language, explanations about prompt engineering, or meta commentary.
-7. Convert vague requests into executable requirements when possible.
-8. Add useful boundaries that reduce accidental unrelated changes.
-9. For coding tasks, it is usually useful to preserve existing behavior outside the requested scope, avoid unrelated refactoring, inspect the relevant implementation before changing it, and perform targeted verification after the change.
-10. Never pretend unknown information is known. If an ambiguity materially affects implementation, state it conservatively instead of inventing an answer.
+Do not extract preferences, wishes, style requests, vague guidance, or softened language such as "try to", "prefer", "ideally", "if possible", "尽量", "最好", "尽可能", "感觉", or "别搞太复杂". Never strengthen modality. If the user says "最好别碰后端", do not turn it into a prohibition.
 
-PROTECTED LITERALS
+Every anchor MUST include a minimal, exact evidence substring copied from <current_user_draft>. If there is no exact evidence, omit the anchor. Do not infer best practices, safety advice, technical facts, filenames, APIs, commands, versions, identifiers, acceptance criteria, or implementation steps.
 
-The user message may contain protected sentinel tokens such as:
+Protected tokens such as __DSH_TASKIFY_AB12CD34_LOCK_000__ are immutable literals. Copy them exactly when they occur in an anchor or its evidence. Never invent, alter, split, or partially copy a protected token.
 
-__DSH_TASKIFY_XXXX_LOCK_000__
+Return strict JSON only, with exactly this schema:
+{"anchors":[{"text":"short normalized constraint","evidence":"exact source substring"}]}
 
-Every protected sentinel is immutable.
+The anchors array may be empty and must contain at most 8 items. Keep the user's primary language. Normalization may shorten or clarify, but must never make the source stronger. Do not wrap the JSON in Markdown and do not add commentary.`
 
-You MUST:
-- preserve every sentinel exactly;
-- preserve the number of occurrences;
-- never rename it;
-- never translate it;
-- never split it;
-- never delete it;
-- never duplicate it.
-
-ADAPTIVE DEPTH
-
-Automatically choose the minimum necessary enhancement depth.
-
-LIGHT:
-Use when the request is already precise.
-Only clarify scope, constraints, verification, or completion reporting when useful.
-
-STANDARD:
-Use when the goal is clear but execution boundaries or acceptance criteria are missing.
-
-DEEP:
-Use only for genuinely complex, multi-step, or poorly structured tasks.
-Organize the request into a compact executable task specification.
-
-OUTPUT STYLE
-
-Prefer natural task specifications.
-
-When structure is useful, use some or all of:
-
-任务
-当前情况
-需要处理
-约束
-验收标准
-完成后
-待确认项
-
-Do NOT force every heading into every prompt.
-
-Do not create empty sections.
-
-Do not repeat the same information in multiple sections.
-
-Keep the output in the same primary language as the user's draft unless the user explicitly asks for another language.
-
-If the original task is already excellent, make only minimal edits.
-
-IMPORTANT
-
-Return ONLY the compiled task.
-
-Do not say:
-"Here is the optimized prompt"
-"优化后的提示词如下"
-"I improved..."
-or any similar introduction.
-
-Do not wrap the entire result in a Markdown code fence.`
-
-export const COMPILER_MAX_TOKENS = 2000
+export const COMPILER_MAX_TOKENS = 800
 export const COMPILER_TIMEOUT_MS = 45_000
-export const COMPILER_TEMPERATURE = 0.2
+export const COMPILER_TEMPERATURE = 0
+export const MAX_ANCHORS = 8
+export const MAX_ANCHOR_TEXT_CHARS = 240
+export const MAX_EVIDENCE_CHARS = 320
 
-export function buildCompilerUserPayload({ draft, context = '' }) {
+const SOFT_MODAL_RE = /(?:尽量|最好|尽可能|如果可以|可以的话|希望|感觉|倾向于|try\s+to|prefer(?:ably)?|ideally|if\s+possible|would\s+like|maybe|perhaps)/iu
+const CLAUSE_BOUNDARY_RE = /[，,。！？!?；;\r\n]/u
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function jsonText(raw) {
+  const trimmed = typeof raw === 'string' ? raw.trim() : ''
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed)
+  return fenced ? fenced[1].trim() : trimmed
+}
+
+function fail(code, message) {
+  return { ok: false, error: { code, message } }
+}
+
+function validateSentinelSubset(value, lock) {
+  const expected = new Map(lock.locks.map((_, index) => [makeSentinel(lock.nonce, index), index]))
+  let previousIndex = -1
+  for (const match of value.matchAll(UNKNOWN_SENTINEL_RE)) {
+    const literalIndex = expected.get(match[0])
+    if (literalIndex === undefined) return false
+    if (value.indexOf(match[0]) !== value.lastIndexOf(match[0])) return false
+    if (literalIndex < previousIndex) return false
+    previousIndex = literalIndex
+  }
+  const withoutKnown = [...expected.keys()].reduce((text, sentinel) => text.replaceAll(sentinel, ''), value)
+  return !withoutKnown.includes('__DSH_TASKIFY_')
+}
+
+function hasInventedConcreteClaim(text, evidence, sourceDraft) {
+  const concrete = lockLiterals(text).locks
+  return concrete.some(literal => !sourceDraft.includes(literal) || !evidence.includes(literal))
+}
+
+function evidenceHasOnlySoftContexts(sourceDraft, evidence) {
+  let offset = 0
+  let found = false
+  while (offset <= sourceDraft.length) {
+    const index = sourceDraft.indexOf(evidence, offset)
+    if (index === -1) break
+    found = true
+    let start = index
+    while (start > 0 && !CLAUSE_BOUNDARY_RE.test(sourceDraft[start - 1])) start -= 1
+    let end = index + evidence.length
+    while (end < sourceDraft.length && !CLAUSE_BOUNDARY_RE.test(sourceDraft[end])) end += 1
+    if (!SOFT_MODAL_RE.test(sourceDraft.slice(start, end))) return false
+    offset = index + Math.max(evidence.length, 1)
+  }
+  return found
+}
+
+/** Build the only model-visible user payload: the current locked draft. */
+export function buildCompilerUserPayload({ draft }) {
   const safeDraft = typeof draft === 'string' ? draft : ''
-  const safeContext = typeof context === 'string' && context.trim() !== '' ? context : 'EMPTY'
-  return `<conversation_context>
-${safeContext}
-</conversation_context>
-
-<user_draft>
+  return `<current_user_draft>
 ${safeDraft}
-</user_draft>
+</current_user_draft>
 
-Compile the user_draft into the minimum necessary executable task specification.
-Use conversation_context only to resolve references and preserve existing intent.`
+Extract explicit hard constraint anchors from current_user_draft.`
+}
+
+/**
+ * Parse, provenance-check, unlock, and concrete-claim-check one model result.
+ * Evidence must be an exact substring of the locked current draft; historical
+ * conversation content is never accepted as a source.
+ */
+export function parseCompilerOutput(raw, { lockedDraft, sourceDraft, lock }) {
+  let parsed
+  try {
+    parsed = JSON.parse(jsonText(raw))
+  } catch {
+    return fail('invalid-json', '模型未返回有效的 Anchor JSON。')
+  }
+  if (!isRecord(parsed) || Object.keys(parsed).some(key => key !== 'anchors') || !Array.isArray(parsed.anchors)) {
+    return fail('invalid-schema', '模型返回的 Anchor 结构无效。')
+  }
+  if (parsed.anchors.length > MAX_ANCHORS) {
+    return fail('too-many-anchors', `Anchor 数量超过上限（${MAX_ANCHORS}）。`)
+  }
+
+  const anchors = []
+  const seen = new Set()
+  for (const item of parsed.anchors) {
+    if (!isRecord(item) || Object.keys(item).some(key => key !== 'text' && key !== 'evidence')) {
+      return fail('invalid-schema', '模型返回了无效的 Anchor。')
+    }
+    const text = typeof item.text === 'string' ? item.text.trim() : ''
+    const evidence = typeof item.evidence === 'string' ? item.evidence.trim() : ''
+    if (!text || !evidence || text.length > MAX_ANCHOR_TEXT_CHARS || evidence.length > MAX_EVIDENCE_CHARS) {
+      return fail('invalid-anchor', 'Anchor 或 evidence 为空或超过长度上限。')
+    }
+    if (!lockedDraft.includes(evidence)) {
+      return fail('missing-provenance', 'Anchor 的 evidence 无法追溯到当前草稿。')
+    }
+    if (!validateSentinelSubset(text, lock) || !validateSentinelSubset(evidence, lock)) {
+      return fail('literal-validation-failed', 'Anchor 未通过关键内容保护校验。')
+    }
+
+    const restoredText = unlockResult(text, lock).trim()
+    const restoredEvidence = unlockResult(evidence, lock).trim()
+    if (!sourceDraft.includes(restoredEvidence)) {
+      return fail('missing-provenance', 'Anchor 的 evidence 无法追溯到当前草稿。')
+    }
+    if (evidenceHasOnlySoftContexts(sourceDraft, restoredEvidence)) {
+      return fail('modal-strengthening', '偏好性表达不能升级为硬约束。')
+    }
+    if (hasInventedConcreteClaim(restoredText, restoredEvidence, sourceDraft)) {
+      return fail('concrete-claim-invented', 'Anchor 引入了当前草稿中不存在的具体代码事实。')
+    }
+
+    const key = `${restoredText}\u0000${restoredEvidence}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    anchors.push({ text: restoredText, evidence: restoredEvidence })
+  }
+  return { ok: true, anchors }
+}
+
+export function buildConstraintContract(anchors) {
+  if (!Array.isArray(anchors) || anchors.length === 0) return ''
+  const escapeXml = value => String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replace(/[\r\n]+/g, ' ')
+  return `<taskify_constraints>\n${anchors.map(anchor => `- ${escapeXml(anchor.text)}`).join('\n')}\n</taskify_constraints>`
 }

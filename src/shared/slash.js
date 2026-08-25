@@ -1,8 +1,8 @@
 /**
  * Slash-command handling for the composer draft.
  *
- * A leading `/name` token is never enhanced. When the draft is exactly a
- * command (or command plus whitespace), the compiler is not called at all.
+ * A leading `/name` token is never analyzed as task prose. When the draft is
+ * exactly a command (or command plus whitespace), Taskify is not called.
  */
 
 const COMMAND_DRAFT_RE = /^(\/[A-Za-z][\w-]*)(?:[\s\u00A0]+([\s\S]*))?$/
@@ -24,11 +24,4 @@ export function parseSlashDraft(rawDraft) {
   const body = (match[2] ?? '').trim()
   if (body === '') return { kind: 'command-only', command }
   return { kind: 'command', command, body }
-}
-
-export function buildFinalDraft(parsed, compiledBody, rawDraft) {
-  if (parsed.kind === 'command') return `${parsed.command} ${compiledBody}`
-  if (parsed.kind === 'plain') return compiledBody
-  // Undo / failure paths restore the exact original draft.
-  return rawDraft
 }
