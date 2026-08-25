@@ -2,239 +2,174 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TaskifySession, NOTICE } from '../src/shared/task-runner.js'
 import { lockLiterals } from '../src/shared/literal-lock.js'
-import { parseSlashDraft } from '../src/shared/slash.js'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+const immediateRemote = handler => ({ compile: async request => handler(request) })
+const successCarrier = (request, anchors) => ({ ok: true, value: { ok: true, requestId: request.requestId, anchors } })
 
-function immediateRemote(handler) {
-  return { compile: async (request) => handler(request) }
-}
-
-function successCarrier(request, text) {
-  return { ok: true, value: { ok: true, requestId: request.requestId, text } }
-}
-
-function plainParsed() {
-  return { kind: 'plain', draft: 'abc' }
-}
-
-test('T01: empty draft is recognized before any request path', async () => {
-  assert.equal(parseSlashDraft('').kind, 'empty')
-  assert.equal(parseSlashDraft(' \n ').kind, 'empty')
-  const controller = new TaskifySession('s1')
-  let calls = 0
-  const started = controller.start({
-    draft: '   ', draftRev: 1, context: '', parsed: { kind: 'empty' }, lock: lockLiterals(''),
-    remote: immediateRemote(() => { calls += 1; return successCarrier({ requestId: 'x' }, 'x') }),
-    onApply: () => {}, getLiveDraft: () => ({ draft: '   ', draftRev: 1 }),
+function start(controller, {
+  draft = 'abc',
+  draftRev = 1,
+  sourceDraft = draft.trim(),
+  remote,
+  getLiveDraft = () => ({ draft, draftRev }),
+  onInvalidate = () => {},
+} = {}) {
+  return controller.start({
+    draft,
+    draftRev,
+    sourceDraft,
+    lock: lockLiterals(sourceDraft),
+    remote,
+    getLiveDraft,
+    onInvalidate,
   })
-  assert.equal(started, null)
+}
+
+test('empty draft is rejected before any request', () => {
+  const controller = new TaskifySession('empty')
+  let calls = 0
+  const result = start(controller, {
+    draft: '   ',
+    sourceDraft: '',
+    remote: immediateRemote(() => { calls += 1 }),
+  })
+  assert.equal(result, null)
   assert.equal(calls, 0)
   controller.destroy()
 })
 
-test('T02: precise task is classified LIGHT and its literals are protected', async () => {
-  const draft = '修复 src/app.ts 第183行的空指针，不改API'
-  const lock = lockLiterals(draft)
-  assert.equal(lock.locks.includes('src/app.ts'), true)
-  const controller = new TaskifySession('s2')
-  const applied = []
-  controller.start({
-    draft, draftRev: 1, context: '', parsed: parseSlashDraft(draft), lock,
-    remote: immediateRemote(request => successCarrier(request, lock.text)),
-    onApply: text => applied.push(text), getLiveDraft: () => ({ draft, draftRev: 1 }),
+test('successful extraction attaches anchors without rewriting the raw draft', async () => {
+  const draft = '整理页面，后端别动'
+  const controller = new TaskifySession('anchored')
+  let request
+  start(controller, {
+    draft,
+    remote: immediateRemote(value => {
+      request = value
+      return successCarrier(value, [{ text: '不修改后端', evidence: '后端别动' }])
+    }),
   })
   await tick()
-  assert.deepEqual(applied, [draft])
-  assert.equal(controller.state.status, 'applied')
+  assert.equal(request.rawDraft, draft)
+  assert.equal(request.sourceDraft, draft)
+  assert.equal(controller.state.status, 'anchored')
+  assert.equal(controller.state.anchoredDraft, draft)
+  assert.deepEqual(controller.state.anchors, [{ text: '不修改后端', evidence: '后端别动' }])
   controller.destroy()
 })
 
-test('T03: vague task runs the compiler and replaces the draft once', async () => {
-  const draft = '这个页面有点乱，帮我整理一下，其他别动'
-  const lock = lockLiterals(draft)
-  const compiled = '任务\n整理当前页面信息层级。\n\n约束\n- 其他内容不动。'
-  const controller = new TaskifySession('s3')
-  const applied = []
-  controller.start({
-    draft, draftRev: 1, context: '', parsed: parseSlashDraft(draft), lock,
-    remote: immediateRemote(request => successCarrier(request, compiled)),
-    onApply: text => applied.push(text), getLiveDraft: () => ({ draft, draftRev: 1 }),
-  })
+test('empty anchors are a visible no-op success', async () => {
+  const draft = '把 README 中的 foo 改成 bar。'
+  const controller = new TaskifySession('noop')
+  start(controller, { draft, remote: immediateRemote(request => successCarrier(request, [])) })
   await tick()
-  assert.deepEqual(applied, [compiled])
+  assert.equal(controller.state.status, 'noop')
+  assert.deepEqual(controller.state.anchors, [])
   controller.destroy()
 })
 
-test('T07: draft edits during the request discard the late result', async () => {
-  const draft = 'abc'
-  const lock = lockLiterals(draft)
-  const controller = new TaskifySession('s7')
-  const applied = []
-  controller.start({
-    draft, draftRev: 1, context: '', parsed: parseSlashDraft(draft), lock,
-    remote: immediateRemote(request => successCarrier(request, 'abcd')),
-    onApply: text => applied.push(text),
-    getLiveDraft: () => ({ draft: 'user edited', draftRev: 2 }),
+test('draft edits during extraction discard the stale result and invalidate Host state', async () => {
+  const draft = '后端别动'
+  const controller = new TaskifySession('stale')
+  let invalidations = 0
+  start(controller, {
+    draft,
+    remote: immediateRemote(request => successCarrier(request, [{ text: '不修改后端', evidence: '后端别动' }])),
+    getLiveDraft: () => ({ draft: '后端可以改', draftRev: 2 }),
+    onInvalidate: () => { invalidations += 1 },
   })
   await tick()
-  assert.equal(applied.length, 0)
   assert.equal(controller.state.status, 'error')
   assert.equal(controller.state.error.code, 'draft-changed')
   assert.equal(controller.state.notice.text, NOTICE.DRAFT_CHANGED)
+  assert.equal(invalidations, 1)
   controller.destroy()
 })
 
-test('T08: cancel invalidates the in-flight request and keeps the draft', async () => {
+test('cancel aborts the request, keeps no anchors, and invalidates Host state', async () => {
   let rejectPending
   const pending = new Promise((resolve, reject) => { rejectPending = reject })
-  const controller = new TaskifySession('s8')
-  const applied = []
-  controller.start({
-    draft: 'abc', draftRev: 1, context: '', parsed: plainParsed(), lock: lockLiterals('abc'),
+  const controller = new TaskifySession('cancel')
+  let invalidations = 0
+  start(controller, {
     remote: { compile: () => pending },
-    onApply: text => applied.push(text), getLiveDraft: () => ({ draft: 'abc', draftRev: 1 }),
+    onInvalidate: () => { invalidations += 1 },
   })
   controller.cancel()
   rejectPending(new Error('aborted'))
   await tick()
-  assert.equal(applied.length, 0)
   assert.equal(controller.state.status, 'ready')
+  assert.deepEqual(controller.state.anchors, [])
+  assert.equal(invalidations, 1)
   controller.destroy()
 })
 
-test('T09: provider errors are visible and retryable', async () => {
-  const controller = new TaskifySession('s9')
-  controller.start({
-    draft: 'abc', draftRev: 1, context: '', parsed: plainParsed(), lock: lockLiterals('abc'),
-    remote: immediateRemote(request => ({
-      ok: true,
-      value: { ok: false, requestId: request.requestId, error: { code: 'llm-failed', message: 'boom' } },
-    })),
-    onApply: () => assert.fail('must not apply'), getLiveDraft: () => ({ draft: 'abc', draftRev: 1 }),
+test('provider and transport errors remain visible and retryable', async () => {
+  const provider = new TaskifySession('provider-error')
+  start(provider, { remote: immediateRemote(request => ({
+    ok: true,
+    value: { ok: false, requestId: request.requestId, error: { code: 'llm-failed', message: 'boom' } },
+  })) })
+  await tick()
+  assert.equal(provider.state.status, 'error')
+  assert.equal(provider.state.error.code, 'llm-failed')
+  assert.equal(provider.state.notice.text, 'boom')
+  provider.destroy()
+
+  const transport = new TaskifySession('transport-error')
+  start(transport, { remote: immediateRemote(() => ({
+    ok: false, error: { code: 'transport-failed', message: 'offline' },
+  })) })
+  await tick()
+  assert.equal(transport.state.status, 'error')
+  assert.equal(transport.state.error.code, 'transport-failed')
+  transport.destroy()
+})
+
+test('editing an anchored draft clears read-only anchors and requests Host invalidation', async () => {
+  const draft = '功能别删'
+  const controller = new TaskifySession('edit')
+  start(controller, {
+    draft,
+    remote: immediateRemote(request => successCarrier(request, [{ text: '保留现有功能', evidence: '功能别删' }])),
+  })
+  await tick()
+  assert.equal(controller.state.status, 'anchored')
+  assert.equal(controller.onDraftChanged('功能可以删'), true)
+  assert.equal(controller.state.status, 'ready')
+  assert.deepEqual(controller.state.anchors, [])
+  controller.destroy()
+})
+
+test('invalid response provenance is rejected defensively', async () => {
+  const controller = new TaskifySession('bad-provenance')
+  start(controller, {
+    draft: '整理页面',
+    remote: immediateRemote(request => successCarrier(request, [{ text: '不修改后端', evidence: '后端别动' }])),
   })
   await tick()
   assert.equal(controller.state.status, 'error')
-  assert.equal(controller.state.error.code, 'llm-failed')
-  assert.equal(controller.state.notice.text, 'boom')
+  assert.equal(controller.state.error.code, 'bad-response')
   controller.destroy()
 })
 
-test('transport errors remain visible and retryable', async () => {
-  const controller = new TaskifySession('transport-error')
-  controller.start({
-    draft: 'abc', draftRev: 1, context: '', parsed: plainParsed(), lock: lockLiterals('abc'),
-    remote: immediateRemote(() => ({ ok: false, error: { code: 'transport-failed', message: 'offline' } })),
-    onApply: () => assert.fail('must not apply'), getLiveDraft: () => ({ draft: 'abc', draftRev: 1 }),
-  })
-  await tick()
-  assert.equal(controller.state.status, 'error')
-  assert.equal(controller.state.error.code, 'transport-failed')
-  assert.equal(controller.state.notice.text, 'offline')
-  controller.destroy()
-})
-
-test('T10: undo restores the original draft byte-for-byte', async () => {
-  const original = 'abc\n'
-  const lock = lockLiterals(original.trim())
-  const controller = new TaskifySession('s10')
-  let current = original
-  const applied = []
-  controller.start({
-    draft: original, draftRev: 1, context: '', parsed: parseSlashDraft(original), lock,
-    remote: immediateRemote(request => successCarrier(request, 'abcd')),
-    onApply: text => { current = text; applied.push(text) },
-    getLiveDraft: () => ({ draft: current, draftRev: 1 }),
-  })
-  await tick()
-  assert.deepEqual(applied, ['abcd'])
-  assert.equal(controller.canUndo(current), true)
-  const undone = []
-  assert.equal(controller.undo(current, text => undone.push(text)), true)
-  assert.deepEqual(undone, [original])
-  assert.equal(controller.state.status, 'ready')
-  controller.destroy()
-})
-
-test('T11: manual edits after apply destroy the undo checkpoint', async () => {
-  const controller = new TaskifySession('s11')
-  controller.start({
-    draft: 'abc', draftRev: 1, context: '', parsed: plainParsed(), lock: lockLiterals('abc'),
-    remote: immediateRemote(request => successCarrier(request, 'abcd')),
-    onApply: () => {}, getLiveDraft: () => ({ draft: 'abc', draftRev: 1 }),
-  })
-  await tick()
-  assert.equal(controller.state.status, 'applied')
-  controller.onDraftChanged('abcd-manual')
-  assert.equal(controller.state.status, 'edited')
-  assert.equal(controller.canUndo('abcd-manual'), false)
-  controller.destroy()
-})
-
-test('T12: successful compile only writes the draft and never submits', async () => {
-  const controller = new TaskifySession('s12')
-  let applied = 0
-  let submitted = 0
-  controller.start({
-    draft: 'abc', draftRev: 1, context: '', parsed: plainParsed(), lock: lockLiterals('abc'),
-    remote: {
-      compile: async request => {
-        submitted += 1
-        return successCarrier(request, 'abcd')
-      },
-      submit: () => { submitted += 1 },
-    },
-    onApply: () => { applied += 1 }, getLiveDraft: () => ({ draft: 'abc', draftRev: 1 }),
-  })
-  await tick()
-  assert.equal(applied, 1)
-  assert.equal(submitted, 1, 'only compile was called; no submit API exists on the controller')
-  controller.destroy()
-})
-
-test('T13: sessions are isolated and a destroyed session can never write', async () => {
+test('sessions stay isolated and a destroyed session ignores late results', async () => {
   let resolveA
   const pendingA = new Promise(resolve => { resolveA = resolve })
-  const appliedA = []
-  const appliedB = []
   const a = new TaskifySession('a')
   const b = new TaskifySession('b')
-
-  a.start({
-    draft: 'A', draftRev: 1, context: '', parsed: { kind: 'plain', draft: 'A' }, lock: lockLiterals('A'),
-    remote: { compile: () => pendingA },
-    onApply: text => appliedA.push(text), getLiveDraft: () => ({ draft: 'A', draftRev: 1 }),
-  })
-  const lockB = lockLiterals('B')
-  b.start({
-    draft: 'B', draftRev: 1, context: '', parsed: { kind: 'plain', draft: 'B' }, lock: lockB,
-    remote: immediateRemote(request => successCarrier(request, `${lockB.text} compiled`)),
-    onApply: text => appliedB.push(text), getLiveDraft: () => ({ draft: 'B', draftRev: 1 }),
+  start(a, { draft: 'A 后端别动', remote: { compile: () => pendingA } })
+  start(b, {
+    draft: 'B 功能别删',
+    remote: immediateRemote(request => successCarrier(request, [{ text: '保留功能', evidence: '功能别删' }])),
   })
   await tick()
-  assert.deepEqual(appliedB, ['B compiled'])
-
+  assert.equal(b.state.status, 'anchored')
   a.destroy()
-  resolveA({ ok: true, value: { ok: true, requestId: 'stale', text: 'A compiled' } })
+  resolveA({ ok: true, value: { ok: true, requestId: 'stale', anchors: [{ text: 'x', evidence: 'A' }] } })
   await tick()
-  assert.equal(appliedA.length, 0)
+  assert.equal(a.disposed, true)
+  assert.equal(b.state.anchors[0].text, '保留功能')
   b.destroy()
-})
-
-test('T14: literal validation failure is a hard fail with no draft write', async () => {
-  const draft = '修复 src/app.ts 的空指针'
-  const lock = lockLiterals(draft)
-  const controller = new TaskifySession('s14')
-  const applied = []
-  controller.start({
-    draft, draftRev: 1, context: '', parsed: parseSlashDraft(draft), lock,
-    remote: immediateRemote(request => successCarrier(request, '修复那个文件的空指针')),
-    onApply: text => applied.push(text), getLiveDraft: () => ({ draft, draftRev: 1 }),
-  })
-  await tick()
-  assert.equal(applied.length, 0)
-  assert.equal(controller.state.status, 'error')
-  assert.equal(controller.state.error.code, 'literal-validation-failed')
-  assert.equal(controller.state.notice.text, NOTICE.LITERAL_VALIDATION_FAILED)
-  controller.destroy()
 })
