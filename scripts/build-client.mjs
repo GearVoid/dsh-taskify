@@ -6,7 +6,8 @@ import { build } from 'esbuild'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const result = await build({
-  entryPoints: [join(root, 'src/client/index.jsx')],
+  absWorkingDir: root,
+  entryPoints: ['./src/client/index.jsx'],
   bundle: true,
   format: 'cjs',
   platform: 'browser',
