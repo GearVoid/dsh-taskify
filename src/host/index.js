@@ -111,7 +111,7 @@ export async function bindTaskifyInboxMessages(stateProjection, ctx, payload, ne
 
   const current = stateProjection.getState(sessionId)
   const humanDrafts = new Set(decision.messages.map(textOfHumanMessage).filter(value => value !== undefined))
-  let matched = false
+  let matchedMessage
   let requeue
   const messages = []
 
@@ -130,14 +130,14 @@ export async function bindTaskifyInboxMessages(stateProjection, ctx, payload, ne
 
     const binds = inspected.source.binding.acceptedDrafts.some(draft => humanDrafts.has(draft))
     if (binds) {
-      matched = true
+      matchedMessage = message
       messages.push(message)
     } else {
       requeue = message
     }
   }
 
-  if (matched) {
+  if (matchedMessage !== undefined) {
     stateProjection.update(sessionId, current.revision, {
       type: 'activate',
       requestId: current.request.bundle.requestId,
@@ -146,7 +146,7 @@ export async function bindTaskifyInboxMessages(stateProjection, ctx, payload, ne
     })
     hooks.suppressNextContext?.(sessionId, current.request.bundle.anchors)
   }
-  if (requeue !== undefined && !matched) {
+  if (requeue !== undefined && matchedMessage === undefined) {
     const result = await injectOrClassifyCommit(payload.agent, requeue)
     let status = result.status
     if (result.committed) status = (await checkpointDurability(ctx, payload.agent.session)).status
@@ -168,6 +168,7 @@ export class TaskifyService extends Service {
     super(ctx, 'taskify')
     this.stateProjection = new TaskifyStateProjection()
     this.dirtySessions = new Set()
+    this.bindingSessions = new Set()
     this.contextRegistrations = new Map()
     this.contextSuppressions = new Map()
     this.typertRemote = bindTypertRemote(this, 'taskify')
@@ -187,17 +188,7 @@ export class TaskifyService extends Service {
         this.dirtySessions.add(String(session.id))
       }
     })
-    ctx.on('agent/pre-step', (payload, next) => bindTaskifyInboxMessages(
-      this.stateProjection,
-      ctx,
-      payload,
-      next,
-      {
-        suppressNextContext: (sessionId, anchors) => {
-          this.contextSuppressions.set(sessionId, anchors.map(anchor => ({ ...anchor })))
-        },
-      },
-    ))
+    ctx.on('agent/pre-step', (payload, next) => this.bindPreStep(payload, next))
 
     for (const agent of ctx.agents.list?.() ?? []) {
       this.hydrateAgent(agent)
@@ -207,6 +198,20 @@ export class TaskifyService extends Service {
 
   liveAgent(sessionId) {
     return liveAgentOf(this.ctx, sessionId)
+  }
+
+  async bindPreStep(payload, next) {
+    const sessionId = payload?.agent?.id
+    if (typeof sessionId === 'string' && sessionId !== '') this.bindingSessions.add(sessionId)
+    try {
+      return await bindTaskifyInboxMessages(this.stateProjection, this.ctx, payload, next, {
+        suppressNextContext: (exactSessionId, anchors) => {
+          this.contextSuppressions.set(exactSessionId, anchors.map(anchor => ({ ...anchor })))
+        },
+      })
+    } finally {
+      if (typeof sessionId === 'string' && sessionId !== '') this.bindingSessions.delete(sessionId)
+    }
   }
 
   installRuntimeContext(agent) {
@@ -269,11 +274,14 @@ export class TaskifyService extends Service {
       this.dirtySessions?.delete(sessionId)
       return current
     }
-    if (this.stateProjection.has(sessionId) && rebuilt.revision === current.revision) {
-      this.dirtySessions?.delete(sessionId)
-      return current
-    }
-    const state = this.stateProjection.rebuild(sessionId, rebuilt)
+    const converged = this.stateProjection.has(sessionId)
+      ? {
+          ...rebuilt,
+          durability: current.durability,
+          runtimeContext: current.runtimeContext,
+        }
+      : rebuilt
+    const state = this.stateProjection.rebuild(sessionId, converged)
     this.dirtySessions?.delete(sessionId)
     return state
   }
@@ -284,6 +292,7 @@ export class TaskifyService extends Service {
   }
 
   refreshState(sessionId) {
+    if (this.bindingSessions?.has(sessionId)) return this.stateProjection.getState(sessionId)
     if (!this.dirtySessions?.has(sessionId)) return this.stateProjection.getState(sessionId)
     const agent = liveAgentOf(this.ctx, sessionId)
     if (agent) return this.hydrateAgent(agent)

@@ -19,6 +19,32 @@ function statusForHostState(hostState) {
   return hostState?.anchors?.length > 0 ? 'anchored' : 'ready'
 }
 
+/** Derive the composer dock view without promoting armed anchors to persistence. */
+export function taskifyAnchorDockModel(hostState, currentDraft) {
+  const persistent = Array.isArray(hostState?.anchors)
+    ? hostState.anchors.map(anchor => ({
+        kind: 'persistent',
+        key: anchor.id,
+        anchor,
+      }))
+    : []
+  const bundle = hostState?.request?.phase === 'armed' ? hostState.request.bundle : null
+  const matchesDraft = bundle !== null && bundle.boundDraft === currentDraft
+  const pending = matchesDraft
+    ? bundle.anchors.map((anchor, index) => ({
+        kind: 'pending',
+        key: `pending:${bundle.requestId}:${index}`,
+        anchor,
+      }))
+    : []
+
+  return {
+    persistent,
+    pending,
+    noop: matchesDraft && bundle.anchors.length === 0,
+  }
+}
+
 function cloneState(state) {
   return {
     ...state,

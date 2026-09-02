@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { TaskifySession, NOTICE } from '../src/shared/task-runner.js'
+import { TaskifySession, NOTICE, taskifyAnchorDockModel } from '../src/shared/task-runner.js'
 import { lockLiterals } from '../src/shared/literal-lock.js'
 import { createInitialTaskifyState } from '../src/shared/state.js'
 
@@ -42,6 +42,49 @@ function persistentState(sessionId, revision, anchors) {
     })),
   }
 }
+
+test('dock exposes same-draft armed anchors as pending without promoting them', () => {
+  const draft = '整理页面，后端别动'
+  const hostState = armedState('dock-pending', 2, draft, [
+    { text: '不修改后端', evidence: '后端别动' },
+  ], draft)
+  hostState.anchors = persistentState('dock-pending', 1, [
+    { id: 'existing', text: '保留现有接口', evidence: '现有接口' },
+  ]).anchors
+
+  const model = taskifyAnchorDockModel(hostState, draft)
+
+  assert.equal(model.persistent.length, 1)
+  assert.equal(model.persistent[0].kind, 'persistent')
+  assert.equal(model.persistent[0].anchor.id, 'existing')
+  assert.equal(model.pending.length, 1)
+  assert.equal(model.pending[0].kind, 'pending')
+  assert.deepEqual(model.pending[0].anchor, { text: '不修改后端', evidence: '后端别动' })
+  assert.equal(model.noop, false)
+})
+
+test('dock hides stale armed results while preserving persistent anchors', () => {
+  const hostState = armedState('dock-stale', 2, '旧草稿', [
+    { text: '保留旧约束', evidence: '旧草稿' },
+  ])
+  hostState.anchors = persistentState('dock-stale', 1, [
+    { id: 'persistent', text: '跨轮约束', evidence: '跨轮' },
+  ]).anchors
+
+  const model = taskifyAnchorDockModel(hostState, '新草稿')
+
+  assert.equal(model.persistent.length, 1)
+  assert.deepEqual(model.pending, [])
+  assert.equal(model.noop, false)
+})
+
+test('dock keeps an empty same-draft armed result visible as a no-op', () => {
+  const hostState = armedState('dock-noop', 2, '无需额外约束', [])
+  const model = taskifyAnchorDockModel(hostState, '无需额外约束')
+
+  assert.deepEqual(model.pending, [])
+  assert.equal(model.noop, true)
+})
 
 function createRemote(sessionId, options = {}) {
   const remote = {

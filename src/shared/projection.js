@@ -54,6 +54,14 @@ function frozenSnapshot(snapshot) {
   return Object.freeze(copy)
 }
 
+function textOfHumanMessage(message) {
+  if (!message || message.role !== 'user' || message.source?.kind !== 'user' || !Array.isArray(message.content)) return undefined
+  return message.content
+    .filter(block => block?.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('\n')
+}
+
 /** Fold raw known DSH events plus live/rebuilt Inbox without parsing content. */
 export function rebuildTaskifyState({ sessionId, events, inbox, durabilityStatus = 'unavailable' }) {
   if (typeof sessionId !== 'string' || sessionId === '') throw new TypeError('sessionId must not be empty')
@@ -91,6 +99,12 @@ export function rebuildTaskifyState({ sessionId, events, inbox, durabilityStatus
   }
 
   const queues = { 'next-turn': [], 'next-step': [] }
+  let turnOpen = false
+  const closeUnconsumedClaims = () => {
+    for (const record of activations.values()) {
+      if (record.status === 'claimed') record.status = 'canceled'
+    }
+  }
   for (const event of events) {
     if (event?.type === 'agent/inbox/spliced') {
       const splice = event.data
@@ -105,8 +119,32 @@ export function rebuildTaskifyState({ sessionId, events, inbox, durabilityStatus
       for (const message of splice.inserted) observe(message, 'pending')
       continue
     }
-    if (event?.type === 'user/message') observe(event.data, 'consumed')
-    else if (event?.type !== undefined) diagnostics.unrelated += 1
+    if (event?.type === 'user/message') {
+      const humanDraft = textOfHumanMessage(event.data)
+      if (humanDraft === undefined) {
+        observe(event.data, 'consumed')
+      } else {
+        for (const record of activations.values()) {
+          if (record.status === 'claimed' && record.source.binding.acceptedDrafts.includes(humanDraft)) {
+            record.status = 'consumed'
+          }
+        }
+      }
+      continue
+    }
+    if (event?.type === 'turn/start') {
+      if (turnOpen) closeUnconsumedClaims()
+      turnOpen = true
+      diagnostics.unrelated += 1
+      continue
+    }
+    if (event?.type === 'turn/end') {
+      closeUnconsumedClaims()
+      turnOpen = false
+      diagnostics.unrelated += 1
+      continue
+    }
+    if (event?.type !== undefined) diagnostics.unrelated += 1
   }
 
   const live = inboxMessages(inbox, eventInbox(events))
