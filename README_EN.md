@@ -1,12 +1,12 @@
 # DSH Taskify
 
-[简体中文](./README.md) | **English**
+[简体中文（默认）](./README.md) | **English**
 
-## An agent can complete the task and still cross your boundaries
+## Persistent constraints for a DeepSeek Harness session
 
-“Don't touch the backend.” “Keep every feature.” “Leave the API unchanged.” “Add no dependencies.” These boundaries are often buried in natural language and can get lost during execution.
+“Don't touch the backend.” “Keep every feature.” “Leave the API unchanged.” “Add no dependencies.” These boundaries are easy to lose over a long agent task.
 
-DSH Taskify does not rewrite your prompt. It extracts only the hard constraints you explicitly stated, presents them as reviewable **Intent Anchors**, and sends them alongside the original task.
+DSH Taskify does not rewrite your prompt. It extracts only the hard constraints you explicitly stated, presents them as reviewable **Persistent Anchors**, and keeps active Anchors in the current DSH session until you pause, resume, remove, or clear them.
 
 > Make the dashboard look better. Don't touch the backend, don't remove any features, and don't add new dependencies.
 
@@ -16,83 +16,61 @@ DSH Taskify does not rewrite your prompt. It extracts only the hard constraints 
 
 **Your original words stay untouched. Taskify pins the boundaries separately.**
 
-### Raw task → 🔒 Constraint Chips → Send
-
-![DSH Taskify v0.2 extracts read-only constraints before send](./assets/demo.gif)
+![DSH Taskify interaction demo](./assets/demo.gif)
 
 [![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
 
-## The problem isn't comprehension. It's constraint drift.
+## What's new in v0.3
 
-Traditional prompt enhancers rewrite the whole input. Taskify preserves the raw task and gives each explicit constraint a visible, traceable path to the agent:
+v0.2 Anchors were consumed by one send. v0.3 moves authority to the Host and makes Anchors persistent within the exact session.
 
 ```text
-Raw task ───────────────────────────────→ Agent
-    │
-    └─ 🔒 Explicit constraint + evidence → Agent
+Current draft
+   ↓ click Taskify
+Pending Anchors with exact source evidence
+   ↓ send the matching raw message
+Host activates session-scoped Persistent Anchors
+   ↓
+Active Anchors guide later turns
+   ↓
+User can Pause / Resume / Remove / Clear All
 ```
 
-Taskify does not decide how the agent should work or add requirements for the user. When no explicit hard constraint exists, it simply does nothing.
+- Active Anchors continue across turns.
+- Host state is authoritative; the Client is a disposable snapshot cache.
+- Known DSH Session Events and UserMessages provide replayable state without upstream changes.
+- Only the user can mutate Anchor lifecycle state.
+- The Client refreshes from the Host when a model turn settles, so the next composer immediately shows active Anchors.
+- New sessions and forks do not inherit Anchors.
 
-> Raw Prompt is the source of truth. Extract, don't invent.
-
-## Install
+## Install or update
 
 ```sh
-dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.2.0
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.3.0
 ```
 
-Then start or restart DeepSeek Harness Web:
+Then restart DeepSeek Harness Web:
 
 ```sh
 dsh web
 ```
 
-## What it does
+If an older version is installed, run the same `plugin add` command again and restart DSH Web to load both the new Host code and Client bundle.
 
-Given:
+## Use
 
-> This dashboard is messy. Clean it up, but don't touch the backend or remove any features.
+1. Enter the raw task in DSH Web.
+2. Click `✨ Taskify`.
+3. Review the read-only chips marked “Pending activation.”
+4. Send through DSH's normal send button.
+5. When that matching message is accepted, the Anchors become active for the session.
 
-Clicking `✨ Taskify` leaves the composer unchanged and displays read-only chips nearby:
+Hover or focus a chip to inspect its exact evidence. Active Anchors can be paused, resumed, removed individually, or cleared together. A draft with no explicit hard boundary is a valid no-op.
 
-```text
-🔒 Do not modify the backend
-🔒 Preserve existing features
-```
-
-Hover or focus a chip to inspect its exact source evidence. A draft with no explicit hard boundary is a valid no-op:
-
-```text
-✓ No additional constraints found
-```
-
-## Flow
-
-```text
-Current user draft
-   ↓
-Parse the Slash command body
-   ↓
-Protect code, paths, and other literals
-   ↓
-Extract Anchor + Evidence with the current session model
-   ↓
-Validate provenance, modality, and concrete code claims
-   ↓
-Display read-only chips without rewriting the draft
-   ↓
-The user sends manually
-   ↓
-Raw Prompt + user-level Taskify Constraint Contract
-```
-
-Taskify does not recover constraints from conversation history, search the workspace, or generate goals, plans, acceptance criteria, and generic engineering advice.
-
-## Anchor contract
+## Extraction contract
 
 ```json
 {
@@ -105,30 +83,24 @@ Taskify does not recover constraints from conversation history, search the works
 }
 ```
 
-Every anchor requires exact evidence from the current draft. Preferences and softened language such as “try to” or “ideally” are not promoted to hard constraints. `anchors: []` is a valid success.
+Every Anchor requires exact evidence from the current draft. Preferences and softened language such as “try to” or “ideally” are not promoted to hard constraints. `anchors: []` is a valid success.
 
-## Agent delivery
+Taskify does not search the workspace, generate goals, plans, acceptance criteria, or engineering advice, and does not reimplement DSH `/goal`.
 
-The user still sends through DSH's normal button. When that human message exactly matches the anchored draft, Taskify uses the official `agent/pre-step` extension point to append a user-role, plugin-sourced message:
-
-```xml
-<taskify_constraints>
-- Do not modify the backend
-- Preserve existing features
-</taskify_constraints>
-```
-
-The contract never enters the System Prompt and has no higher authority than the user's text. No empty template is sent for a no-op.
-
-## Safety and state
+## State and safety boundaries
 
 - **Literal Lock** protects code, paths, URLs, IP/ports, versions, CLI tokens, and identifiers.
 - **Provenance** requires evidence to be an exact substring of the current draft.
-- **Concrete Claim Guard** rejects newly invented paths, URLs, CLI tokens, versions, and obvious identifiers.
-- **Revision / race protection** discards stale responses and clears Host state after draft edits.
-- **Read-only chips** cannot be edited or deleted; editing the raw draft invalidates them.
-- **Cancel, retry, and session isolation** remain supported.
-- Drafts containing Reference Chips are not extracted in this release.
+- **Concrete Claim Guard** rejects invented paths, URLs, CLI tokens, versions, and obvious identifiers.
+- **Revision / CAS** lets the Host reject stale mutations and return authoritative snapshots.
+- **Draft invalidation** affects only the pending/armed request and never deletes active Anchors.
+- **Durable replay** uses known DSH events when the persistence provider confirms its flush.
+- **Runtime guidance** uses the official `systemPrompt.context` seam for later turns; paused Anchors are excluded.
+- **Session isolation** binds state to the exact session id.
+
+## Deliberate limits
+
+Persistent Anchors are model guidance, not filesystem or Git enforcement. v0.3 does not include dependency/file-write interception, automatic rollback, Git baselines, Minimal Diff Mode, semantic diff audits, native Goal integration, polling, watchState, WebSockets, multi-client realtime sync, or automatic completion expiry.
 
 ## Compatibility
 
@@ -136,9 +108,9 @@ The contract never enters the System Prompt and has no higher authority than the
 - DSH core plugin API: `0.1.0-rc.6`
 - DSH Web Client API: `0.0.1-rc.1`
 - Node.js: `^22.19.0 || >=24.0.0`
-- pnpm: `11.x` (this repository uses `11.19.0`)
+- pnpm: `11.x` (`11.19.0` in this repository)
 
-DSH remains in Developer Preview and may introduce breaking changes.
+DSH remains in Developer Preview and may introduce compatibility changes.
 
 ## Development
 
@@ -149,7 +121,9 @@ pnpm build
 pnpm pack:check
 ```
 
-The suite covers extraction-result validation, invented-constraint rejection, modality protection, literal preservation, empty anchors, provenance, no prompt rewrite, draft races, cancellation, session isolation, and user-level contract injection.
+The suite covers extraction validation, literal preservation, provenance, draft races, Host revisions, durable replay, session isolation, Anchor lifecycle controls, runtime context, and turn-settled Client convergence.
+
+See [`docs/`](./docs/) for the v0.3 architecture and implementation records.
 
 ## License
 

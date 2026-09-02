@@ -1,12 +1,12 @@
 # DSH Taskify
 
-**简体中文** | [English](./README_EN.md)
+**简体中文（默认）** | [English](./README_EN.md)
 
-## Agent 能完成任务，不代表它不会越界
+## 给 DeepSeek Harness 会话加一组不会在下一轮消失的硬约束
 
-“后端别动”、“功能别删”、“API 保持不变”、“不要新增依赖”——这些边界经常埋在自然语言里，执行过程中很容易被淹没。
+“后端别动”、“功能别删”、“API 保持不变”、“不要新增依赖”——这些边界经常埋在自然语言里，也最容易在长任务中逐轮漂移。
 
-DSH Taskify 不重写你的 Prompt。它只把你明确说过的硬约束提取成可审阅的 **Intent Anchors**，和原始任务一起交给 Agent。
+DSH Taskify 不重写你的 Prompt。它只提取你明确说过的硬约束，显示为可审阅、可追溯的 **Persistent Anchors（持久锚点）**。发送原任务后，这些锚点会在当前 DSH 会话中持续生效，直到你主动暂停、恢复、删除或清空。
 
 > 把 dashboard 做好看点，后端别动，功能别删，也不要增加新的依赖。
 
@@ -16,59 +16,70 @@ DSH Taskify 不重写你的 Prompt。它只把你明确说过的硬约束提取�
 
 **原文一字不改。Taskify 只把底线单独钉住。**
 
-### 原始任务 → 🔒 Constraint Chips → Send
-
-![DSH Taskify v0.2：从原始任务提取只读约束并发送](./assets/demo.gif)
+![DSH Taskify 交互演示](./assets/demo.gif)
 
 [![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
 
-## 问题不是 Agent 看不懂，而是约束会漂移
+## v0.3 有什么不同
 
-传统 Prompt Enhancer 会重写整段输入。Taskify 保留原始任务，只给明确约束增加一条可见、可追溯的发送路径：
+v0.2 的 Anchor 只服务一次发送；v0.3 将状态所有权迁移到 Host，并把 Anchor 升级为当前会话内的持久约束。
 
 ```text
-原始任务 ─────────────────────────→ Agent
-    │
-    └─ 🔒 明确约束（附原文证据）──→ Agent
+当前草稿
+   ↓ 点击 Taskify
+待发送 Anchor（仍可核对原文证据）
+   ↓ 发送完全匹配的原始消息
+Host 激活为 Session-scoped Persistent Anchor
+   ↓
+后续每一轮继续进入模型上下文
+   ↓
+用户可 Pause / Resume / Remove / Clear All
 ```
 
-Taskify 不替 Agent 决定怎么做，也不替用户补写需求。没有明确硬约束时，它会直接 No-op。
+- **跨轮持续**：第一轮激活后，后续轮次继续携带 active Anchors。
+- **Host 权威状态**：Client 只是快照缓存；刷新、重挂载和事件重放后以 Host 为准。
+- **可恢复表示**：使用 DSH 已知的 Session Event 与 UserMessage 表示状态，不写自定义上游事件。
+- **显式生命周期**：只有用户可以暂停、恢复、删除或清空；Agent 不能修改 Anchor 状态。
+- **确定性收敛**：一次模型轮次结束后，Client 重新读取 Host 快照，下一轮输入框立即显示 active Anchors。
+- **严格会话作用域**：新会话和 fork 不自动继承父会话 Anchors。
 
-> Raw Prompt is the source of truth. Extract, don't invent.
-
-## 一行安装
+## 一行安装或更新
 
 ```sh
-dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.2.0
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.3.0
 ```
 
-然后启动或重启 DeepSeek Harness Web：
+然后重新启动 DeepSeek Harness Web：
 
 ```sh
 dsh web
 ```
 
-## 使用效果
+如果已经安装旧版本，重新执行同一条 `plugin add` 命令并重启 DSH Web，以加载新的 Host 代码和 Client bundle。
 
-输入：
+## 使用方法
+
+1. 在 DSH Web 输入原始任务。
+2. 点击 `✨ Taskify`。
+3. 核对带有“待发送激活”标记的只读 Anchor Chips。
+4. 使用 DSH 原有发送按钮发送原始消息。
+5. 发送完成后，Anchor 变为当前会话的 active 持久约束。
+
+例如输入：
 
 > dashboard 太乱了，帮我整理下，后端别动，功能也别删。
 
-点击 `✨ Taskify` 后，输入框内容保持不变，附近显示只读 Chips：
+Taskify 不修改输入框内容，只显示：
 
 ```text
-🔒 不修改后端
-🔒 保留现有功能
+🔒 不修改后端　待发送激活
+🔒 保留现有功能　待发送激活
 ```
 
-悬停或聚焦 Chip 可检查原文证据：
-
-```text
-来源：“后端别动”
-```
+发送后，这些 Anchor 会继续显示在下一轮输入框。悬停或聚焦 Chip 可查看精确原文证据；active Anchor 可暂停、恢复、单独删除，也可以全部清空。
 
 如果当前输入没有明确硬约束，Taskify 会正常显示：
 
@@ -76,29 +87,7 @@ dsh web
 ✓ 未发现需要额外锚定的约束
 ```
 
-## 工作方式
-
-```text
-当前用户草稿
-   ↓
-解析 Slash 命令正文
-   ↓
-保护代码、路径和其他字面量
-   ↓
-使用当前会话模型提取 Anchor + Evidence
-   ↓
-校验证据、约束强度与具体代码事实
-   ↓
-显示只读 Chips（原文不变）
-   ↓
-用户手动发送
-   ↓
-Raw Prompt + User-level Taskify Constraint Contract
-```
-
-Taskify 不读取最近对话来恢复旧约束，不搜索工作区，也不生成目标、计划、验收标准或工程建议。
-
-## Anchor Contract
+## 提取规则
 
 ```json
 {
@@ -111,31 +100,30 @@ Taskify 不读取最近对话来恢复旧约束，不搜索工作区，也不生
 }
 ```
 
-每个 Anchor 必须能追溯到当前用户草稿中的精确 evidence。`尽量简单`、`最好别碰后端` 等偏好性或弱化表达不会被升级为硬约束。`anchors: []` 是合法成功结果。
+每个 Anchor 必须能追溯到当前草稿中的精确 evidence。`尽量简单`、`最好别碰后端` 等偏好性或弱化表达不会被升级为硬约束。`anchors: []` 是合法成功结果。
 
-## 发送给 Agent
+Taskify 不搜索工作区，不生成目标、计划、验收标准或工程建议，也不重新实现 DSH `/goal`。
 
-用户仍通过 DSH 原有发送按钮手动发送。原始消息保持原样；当消息与已锚定草稿精确匹配时，Taskify 通过 DSH 官方 `agent/pre-step` 扩展点追加一条用户角色、插件来源的消息：
-
-```xml
-<taskify_constraints>
-- 不修改后端
-- 保留现有功能
-</taskify_constraints>
-```
-
-约束不会进入 System Prompt，也不会获得高于用户原话的指令权限。无 Anchor 时不附加空模板。
-
-## 安全与状态
+## 状态与安全边界
 
 - **Literal Lock**：保护代码块、行内代码、路径、URL、IP/端口、版本、CLI 和常见标识符。
 - **Provenance**：evidence 必须是当前草稿的精确子串。
 - **Concrete Claim Guard**：Anchor 不能凭空加入新路径、URL、CLI、版本或明显代码标识符。
-- **Revision / Race Protection**：请求期间草稿变化会丢弃旧结果并清理 Host 状态。
-- **只读 Chips**：不编辑、不删除；修改 Raw Prompt 会立即使 Chips 失效。
-- **Cancel / Retry**：提取中可取消，失败后可重试。
-- **Session 隔离**：请求和 Anchor 按会话隔离；成功注入后一次性消费。
-- **Reference 安全策略**：含 Reference Chip 的草稿暂不提取约束。
+- **Revision / CAS**：Host 使用 revision 检查拒绝过期写入，冲突后 Client 重新读取权威快照。
+- **Draft invalidation**：修改尚未发送的原始草稿只会使 pending/armed request 失效，不会删除 active Anchors。
+- **Durable replay**：当 DSH persistence provider 确认 flush 时，状态可以通过已知事件重放恢复；失败或不可确认时会明确降级。
+- **Runtime guidance**：后续轮次通过 DSH 官方 `systemPrompt.context` 获得当前 active Anchors；paused Anchors 不进入模型上下文。
+- **Session isolation**：状态按精确 session id 隔离，默认不跨新会话或 fork 传播。
+
+## 当前不做什么
+
+Persistent Anchors 是持续的模型指导，不是文件系统或 Git 层面的强制执行。v0.3 不包含：
+
+- 依赖安装拦截、文件写入拦截或自动回滚；
+- Git baseline、Minimal Diff Mode 或 semantic diff audit；
+- 原生 Goal 生命周期集成；
+- watchState、轮询、WebSocket 或多客户端实时同步；
+- 自动判断任务完成并过期 Anchor。
 
 ## 兼容性
 
@@ -145,7 +133,7 @@ Taskify 不读取最近对话来恢复旧约束，不搜索工作区，也不生
 - Node.js：`^22.19.0 || >=24.0.0`
 - pnpm：`11.x`（本仓库使用 `11.19.0`）
 
-DSH 仍处于 Developer Preview，存在兼容性破坏的可能。
+DSH 仍处于 Developer Preview，未来版本可能带来兼容性变化。
 
 ## 开发与测试
 
@@ -156,19 +144,21 @@ pnpm build
 pnpm pack:check
 ```
 
-测试覆盖 Anchor 提取结果校验、无凭据约束拒绝、模态强度保护、Literal preservation、Empty Anchor、Provenance、无 Prompt Rewrite、草稿竞态、取消、Session 隔离和 User-level Contract 注入。
+当前测试覆盖提取校验、Literal preservation、Provenance、草稿竞态、Host revision、durable replay、Session 隔离、Anchor 生命周期、运行时上下文以及 turn-settled Client convergence。
 
 ## 项目结构
 
 ```text
-src/host/       模型调用、Anchor 激活与 Agent 注入
-src/client/     Taskify 按钮、只读 Chips 与草稿失效逻辑
-src/shared/     Compiler、Literal Lock、Schema、Slash 和 Session Runner
-scripts/        Client Bundle 构建脚本
+src/host/       Host 权威状态、激活绑定、持久化与运行时上下文
+src/client/     Taskify 按钮、Anchor Dock 与 Client 快照收敛
+src/shared/     Compiler、Schema、Projection、Session Runner
+scripts/        Client bundle 构建脚本
 test/           Node.js 测试
-client.js       构建后的浏览器端 Bundle
+client.js       构建生成的浏览器端 bundle（请勿手工编辑）
 cordis.patch.yml
 ```
+
+更详细的 v0.3 设计记录见 [`docs/`](./docs/)。
 
 ## 许可证
 

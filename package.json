@@ -1,7 +1,7 @@
 {
   "name": "dsh-taskify",
-  "version": "0.2.0",
-  "description": "Intent Anchor plugin for DeepSeek Harness Web: extract reviewable, provenance-backed constraints without rewriting the user's draft.",
+  "version": "0.3.0",
+  "description": "Persistent Intent Anchors for DeepSeek Harness Web: host-owned, session-scoped constraints without prompt rewriting.",
   "type": "module",
   "main": "src/host/index.js",
   "exports": {
@@ -17,6 +17,7 @@
     "cordis.patch.yml",
     "README.md",
     "README_EN.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
