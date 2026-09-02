@@ -10,27 +10,85 @@ import { lockLiterals } from '../src/shared/literal-lock.js'
 import {
   compileRequestSchema,
   compileResultSchema,
+  anchorMutationRequestSchema,
+  clearAnchorsRequestSchema,
+  getStateRequestSchema,
   invalidateRequestSchema,
+  invalidateResultSchema,
+  taskifyStateSnapshotSchema,
 } from '../src/shared/schema.js'
+import { createInitialTaskifyState } from '../src/shared/state.js'
 
 function parseResult(sourceDraft, output) {
   const lock = lockLiterals(sourceDraft)
   return parseCompilerOutput(output, { lockedDraft: lock.text, sourceDraft, lock })
 }
 
-test('wire schemas expose the v0.2 anchor contract without conversation context', () => {
+test('wire schemas expose revisioned Host state without conversation context', () => {
   const request = compileRequestSchema.parse({
     requestId: 'r1', sessionId: 's1', rawDraft: '后端别动', sourceDraft: '后端别动',
-    draft: '后端别动', nonce: 'ABCDEF12', literals: [],
+    draft: '后端别动', nonce: 'ABCDEF12', literals: [], expectedRevision: 0,
   })
   assert.equal('context' in request, false)
   assert.equal(request.sourceDraft, '后端别动')
+  assert.equal(request.expectedRevision, 0)
+  const state = {
+    ...createInitialTaskifyState('s1'),
+    revision: 2,
+    request: {
+      phase: 'armed',
+      bundle: {
+        requestId: 'r1', boundDraft: '后端别动', sourceDraft: '后端别动',
+        anchors: [{ text: '不修改后端', evidence: '后端别动' }], carrier: null,
+      },
+    },
+  }
   const ok = compileResultSchema.parse({
-    ok: true, requestId: 'r1', anchors: [{ text: '不修改后端', evidence: '后端别动' }],
+    ok: true, requestId: 'r1', state,
   })
-  assert.deepEqual(ok.anchors, [{ text: '不修改后端', evidence: '后端别动' }])
-  assert.deepEqual(invalidateRequestSchema.parse({ sessionId: 's1' }), { sessionId: 's1' })
+  assert.deepEqual(ok.state.request.bundle.anchors, [{ text: '不修改后端', evidence: '后端别动' }])
+  assert.deepEqual(getStateRequestSchema.parse({ sessionId: 's1' }), { sessionId: 's1' })
+  assert.deepEqual(invalidateRequestSchema.parse({ sessionId: 's1', expectedRevision: 2 }), { sessionId: 's1', expectedRevision: 2 })
+  assert.equal(invalidateResultSchema.parse({ ok: true, state: createInitialTaskifyState('s1') }).state.request.phase, 'idle')
+  assert.deepEqual(anchorMutationRequestSchema.parse({ sessionId: 's1', expectedRevision: 2, anchorId: 'a1' }), {
+    sessionId: 's1', expectedRevision: 2, anchorId: 'a1',
+  })
+  assert.deepEqual(clearAnchorsRequestSchema.parse({ sessionId: 's1', expectedRevision: 2 }), {
+    sessionId: 's1', expectedRevision: 2,
+  })
   assert.throws(() => compileRequestSchema.parse({ requestId: '', sessionId: 's1' }))
+})
+
+test('state and mutation schemas strictly reject unknown fields and invalid revisions', () => {
+  const request = {
+    requestId: 'r1', sessionId: 's1', expectedRevision: 0, rawDraft: '后端别动', sourceDraft: '后端别动',
+    draft: '后端别动', nonce: 'ABCDEF12', literals: [],
+  }
+  assert.throws(() => compileRequestSchema.parse({ ...request, unexpected: true }), /unknown field/)
+  assert.throws(() => compileRequestSchema.parse({ ...request, expectedRevision: -1 }), /expectedRevision/)
+  assert.throws(() => compileRequestSchema.parse({ ...request, expectedRevision: 1.5 }), /expectedRevision/)
+  assert.throws(() => invalidateRequestSchema.parse({ sessionId: 's1', expectedRevision: Number.MAX_SAFE_INTEGER + 1 }))
+  assert.throws(() => getStateRequestSchema.parse({ sessionId: 's1', extra: 1 }), /unknown field/)
+})
+
+test('state schema rejects fake goal availability, invalid scope, and malformed phase data', () => {
+  const idle = createInitialTaskifyState('s1')
+  assert.throws(() => taskifyStateSnapshotSchema.parse({
+    ...idle,
+    goalIntegration: { available: true },
+  }), /must be false/)
+  assert.throws(() => taskifyStateSnapshotSchema.parse({
+    ...idle,
+    scope: { kind: 'goal', sessionId: 's1' },
+  }), /exact session/)
+  assert.throws(() => taskifyStateSnapshotSchema.parse({
+    ...idle,
+    request: { phase: 'armed' },
+  }), /state.request.bundle/)
+  assert.throws(() => taskifyStateSnapshotSchema.parse({
+    ...idle,
+    unknown: true,
+  }), /unknown field/)
 })
 
 test('system prompt is extraction-only and permits an empty result', () => {

@@ -54,10 +54,35 @@ const CSS = `
   line-height: 1.25;
   cursor: default;
 }
+.dsh-taskify-chip[data-status="paused"] {
+  opacity: 0.62;
+  border-style: dashed;
+}
 .dsh-taskify-chip-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.dsh-taskify-chip-action,
+.dsh-taskify-clear {
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: 3px 5px;
+}
+.dsh-taskify-chip-action:hover,
+.dsh-taskify-chip-action:focus-visible,
+.dsh-taskify-clear:hover,
+.dsh-taskify-clear:focus-visible {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+.dsh-taskify-context-warning {
+  color: #b26a00;
+  font-size: 12px;
 }
 .dsh-taskify-noop {
   color: color-mix(in srgb, currentColor 68%, transparent);
@@ -109,11 +134,6 @@ function tooltipFor({ busy, empty, unavailable, referenceBlocked, state, remoteR
   return '从当前草稿提取明确、可追溯的硬约束'
 }
 
-function invalidateRemote(sessionId) {
-  if (!taskifyRemote || !sessionId) return Promise.resolve()
-  return taskifyRemote.invalidate({ sessionId }).catch(() => undefined)
-}
-
 function TaskifyButton({ sessionId, useInput, inputActions }) {
   const input = useInput(s => s)
   const controller = taskifySessionFor(sessionId)
@@ -123,12 +143,16 @@ function TaskifyButton({ sessionId, useInput, inputActions }) {
   const draftRev = input?.draftRev ?? -1
   liveRef.current = { draft, draftRev }
 
+  React.useEffect(() => {
+    if (controller && taskifyRemote) void controller.hydrate(taskifyRemote)
+  }, [controller, sessionId])
+
   React.useEffect(() => () => {
     if (sessionId) releaseTaskifySession(sessionId)
   }, [sessionId])
 
   React.useEffect(() => {
-    if (controller?.onDraftChanged(draft)) void invalidateRemote(sessionId)
+    if (controller?.onDraftChanged(draft) && taskifyRemote) void controller.invalidate(taskifyRemote)
   }, [controller, draft, sessionId])
 
   const empty = draft.trim() === ''
@@ -136,7 +160,7 @@ function TaskifyButton({ sessionId, useInput, inputActions }) {
   const unavailable = !input || phase === 'adjudicating' || phase === 'claimed' || phase === 'submitting'
   const referenceBlocked = isReferenceBlocked(input?.occurrences ?? [])
   const busy = state?.status === 'extracting' && !controller?.disposed
-  const remoteReady = taskifyRemote !== undefined
+  const remoteReady = taskifyRemote !== undefined && state?.hostState !== null
 
   const handleClick = () => {
     if (!controller || !inputActions) return
@@ -175,7 +199,6 @@ function TaskifyButton({ sessionId, useInput, inputActions }) {
       lock,
       remote: taskifyRemote,
       getLiveDraft: () => ({ ...liveRef.current }),
-      onInvalidate: () => invalidateRemote(sessionId),
     })
   }
 
@@ -215,21 +238,59 @@ function TaskifyButton({ sessionId, useInput, inputActions }) {
 
 function TaskifyAnchors({ sessionId, input }) {
   const state = useTaskifySession(sessionId)
-  if (!state || state.anchoredDraft !== input?.draft) return null
-  if (state.status === 'noop') {
-    return <div className="dsh-taskify-anchors"><span className="dsh-taskify-noop">✓ 未发现需要额外锚定的约束</span></div>
+  const controller = taskifySessionFor(sessionId)
+  const hostState = state?.hostState
+  if (!state || !hostState) return null
+  const anchors = hostState.anchors
+  const noop = hostState.request.phase === 'armed'
+    && hostState.request.bundle.anchors.length === 0
+    && hostState.request.bundle.boundDraft === input?.draft
+  if (anchors.length === 0 && !noop) return null
+
+  const mutate = (method, anchorId) => {
+    if (!controller || !taskifyRemote) return
+    void controller[method](anchorId, taskifyRemote)
   }
-  if (state.status !== 'anchored' || state.anchors.length === 0) return null
+
   return (
-    <div className="dsh-taskify-anchors" aria-label="Taskify 只读约束">
-      {state.anchors.map((anchor, index) => (
-        <Tooltip key={`${anchor.text}:${index}`} label={`来源：“${anchor.evidence}”`} side="top">
-          <span className="dsh-taskify-chip" tabIndex={0} aria-label={`${anchor.text}；来源：${anchor.evidence}`}>
+    <div className="dsh-taskify-anchors" aria-label="Taskify Session 约束">
+      {anchors.map(anchor => (
+        <Tooltip
+          key={anchor.id}
+          label={`来源：“${anchor.evidence}” · Scope: Session · Status: ${anchor.status === 'active' ? 'Active' : 'Paused'}`}
+          side="top"
+        >
+          <span className="dsh-taskify-chip" data-status={anchor.status} tabIndex={0} aria-label={`${anchor.text}；${anchor.status}`}>
             <span aria-hidden="true">🔒</span>
             <span className="dsh-taskify-chip-text">{anchor.text}</span>
+            <button
+              type="button"
+              className="dsh-taskify-chip-action"
+              onClick={() => mutate(anchor.status === 'active' ? 'pauseAnchor' : 'resumeAnchor', anchor.id)}
+              aria-label={`${anchor.status === 'active' ? '暂停' : '恢复'} ${anchor.text}`}
+            >
+              {anchor.status === 'active' ? '暂停' : '恢复'}
+            </button>
+            <button
+              type="button"
+              className="dsh-taskify-chip-action"
+              onClick={() => mutate('removeAnchor', anchor.id)}
+              aria-label={`移除 ${anchor.text}`}
+            >
+              移除
+            </button>
           </span>
         </Tooltip>
       ))}
+      {anchors.length > 0 && (
+        <button type="button" className="dsh-taskify-clear" onClick={() => void controller?.clearAnchors(taskifyRemote)}>
+          清除全部
+        </button>
+      )}
+      {anchors.length > 0 && hostState.runtimeContext.available === false && (
+        <span className="dsh-taskify-context-warning">⚠ 当前跨轮指导不可用</span>
+      )}
+      {noop && <span className="dsh-taskify-noop">✓ 未发现需要额外锚定的约束</span>}
     </div>
   )
 }
