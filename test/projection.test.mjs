@@ -64,6 +64,60 @@ test('historical activation user/message restores persistent active anchors', ()
   assert.equal(state.anchors[0].id, 'anchor:taskify:2:request-1:1')
 })
 
+test('rc.2 claimed carrier followed by its bound human draft restores persistent anchors', () => {
+  const fx = fixture()
+  const message = activation()
+  fx.inbox.append('next-step', message)
+  fx.inbox.claim('next-step', 1)
+  fx.session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: '/taskify 后端别动' }],
+    source: { kind: 'user' },
+  }), { surfaceOp: 'append' })
+
+  const state = rebuild(fx)
+  assert.equal(state.request.phase, 'idle')
+  assert.equal(state.revision, 3)
+  assert.equal(state.anchors[0].status, 'active')
+})
+
+test('requeued carrier remains armed when the human draft does not match', () => {
+  const fx = fixture()
+  const message = activation()
+  fx.inbox.append('next-step', message)
+  fx.inbox.claim('next-step', 1)
+  fx.inbox.append('next-step', message)
+  fx.session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: '另一条消息' }],
+    source: { kind: 'user' },
+  }), { surfaceOp: 'append' })
+
+  const state = rebuild(fx)
+  assert.equal(state.request.phase, 'armed')
+  assert.equal(state.revision, 2)
+  assert.deepEqual(state.anchors, [])
+})
+
+test('an unconsumed claim cannot bind to a matching draft after its turn ends', () => {
+  const fx = fixture()
+  const message = activation()
+  fx.inbox.append('next-step', message)
+  fx.inbox.claim('next-step', 1)
+  const events = [
+    ...fx.session.events,
+    { type: 'turn/start', data: {} },
+    { type: 'turn/end', data: {} },
+    {
+      type: 'user/message',
+      data: createUserMessage({ content: [{ type: 'text', text: '/taskify 后端别动' }], source: { kind: 'user' } }),
+    },
+  ]
+
+  const state = rebuildTaskifyState({ sessionId: 'session-1', events }).state
+  assert.equal(state.request.phase, 'idle')
+  assert.equal(state.revision, 3)
+  assert.deepEqual(state.anchors, [])
+})
+
 test('removed unactivated carrier rebuilds idle without anchors', () => {
   const fx = fixture()
   const message = activation()

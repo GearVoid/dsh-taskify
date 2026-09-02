@@ -2,7 +2,7 @@ import React from 'react'
 import { Button, Tooltip, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { lockLiterals } from '../shared/literal-lock.js'
 import { parseSlashDraft } from '../shared/slash.js'
-import { NOTICE } from '../shared/task-runner.js'
+import { NOTICE, taskifyAnchorDockModel } from '../shared/task-runner.js'
 import { isReferenceBlocked, REFERENCE_BLOCKED_NOTICE } from '../shared/reference.js'
 import { TYPERT_REMOTE_CONTRIBUTION } from '../shared/schema.js'
 import {
@@ -58,9 +58,17 @@ const CSS = `
   opacity: 0.62;
   border-style: dashed;
 }
+.dsh-taskify-chip[data-status="pending"] {
+  border-style: dotted;
+}
 .dsh-taskify-chip-text {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-taskify-chip-pending {
+  color: color-mix(in srgb, currentColor 68%, transparent);
+  font-size: 11px;
   white-space: nowrap;
 }
 .dsh-taskify-chip-action,
@@ -134,13 +142,18 @@ function tooltipFor({ busy, empty, unavailable, referenceBlocked, state, remoteR
   return '从当前草稿提取明确、可追溯的硬约束'
 }
 
-function TaskifyButton({ sessionId, useInput, inputActions }) {
+function TaskifyButton({ sessionId, useSession, useInput, inputActions }) {
+  const running = useSession(s => s.running)
   const input = useInput(s => s)
   const controller = taskifySessionFor(sessionId)
   const state = useTaskifySession(sessionId)
   const liveRef = React.useRef({ draft: '', draftRev: -1 })
   const draft = input?.draft ?? ''
   const draftRev = input?.draftRev ?? -1
+  const phase = input?.phase ?? 'plain'
+  const previousPhaseRef = React.useRef(phase)
+  const previousRunningRef = React.useRef(running)
+  const suppressDraftInvalidationRef = React.useRef(false)
   liveRef.current = { draft, draftRev }
 
   React.useEffect(() => {
@@ -152,11 +165,26 @@ function TaskifyButton({ sessionId, useInput, inputActions }) {
   }, [sessionId])
 
   React.useEffect(() => {
+    const phaseChanged = previousPhaseRef.current !== phase
+    previousPhaseRef.current = phase
+    if (phaseChanged) {
+      suppressDraftInvalidationRef.current = true
+      queueMicrotask(() => { suppressDraftInvalidationRef.current = false })
+    }
+  }, [phase, sessionId])
+
+  React.useEffect(() => {
+    const turnSettled = previousRunningRef.current === true && running === false
+    previousRunningRef.current = running
+    if (turnSettled && controller && taskifyRemote) void controller.hydrate(taskifyRemote, { quiet: true })
+  }, [controller, running, sessionId])
+
+  React.useEffect(() => {
+    if (phase !== 'plain' || suppressDraftInvalidationRef.current) return
     if (controller?.onDraftChanged(draft) && taskifyRemote) void controller.invalidate(taskifyRemote)
-  }, [controller, draft, sessionId])
+  }, [controller, draft, phase, sessionId])
 
   const empty = draft.trim() === ''
-  const phase = input?.phase ?? 'plain'
   const unavailable = !input || phase === 'adjudicating' || phase === 'claimed' || phase === 'submitting'
   const referenceBlocked = isReferenceBlocked(input?.occurrences ?? [])
   const busy = state?.status === 'extracting' && !controller?.disposed
@@ -241,11 +269,8 @@ function TaskifyAnchors({ sessionId, input }) {
   const controller = taskifySessionFor(sessionId)
   const hostState = state?.hostState
   if (!state || !hostState) return null
-  const anchors = hostState.anchors
-  const noop = hostState.request.phase === 'armed'
-    && hostState.request.bundle.anchors.length === 0
-    && hostState.request.bundle.boundDraft === input?.draft
-  if (anchors.length === 0 && !noop) return null
+  const { persistent, pending, noop } = taskifyAnchorDockModel(hostState, input?.draft)
+  if (persistent.length === 0 && pending.length === 0 && !noop) return null
 
   const mutate = (method, anchorId) => {
     if (!controller || !taskifyRemote) return
@@ -254,9 +279,9 @@ function TaskifyAnchors({ sessionId, input }) {
 
   return (
     <div className="dsh-taskify-anchors" aria-label="Taskify Session 约束">
-      {anchors.map(anchor => (
+      {persistent.map(({ key, anchor }) => (
         <Tooltip
-          key={anchor.id}
+          key={key}
           label={`来源：“${anchor.evidence}” · Scope: Session · Status: ${anchor.status === 'active' ? 'Active' : 'Paused'}`}
           side="top"
         >
@@ -282,12 +307,25 @@ function TaskifyAnchors({ sessionId, input }) {
           </span>
         </Tooltip>
       ))}
-      {anchors.length > 0 && (
+      {pending.map(({ key, anchor }) => (
+        <Tooltip
+          key={key}
+          label={`来源：“${anchor.evidence}” · Scope: Session · Status: Pending activation`}
+          side="top"
+        >
+          <span className="dsh-taskify-chip" data-status="pending" tabIndex={0} aria-label={`${anchor.text}；待发送激活`}>
+            <span aria-hidden="true">🔒</span>
+            <span className="dsh-taskify-chip-text">{anchor.text}</span>
+            <span className="dsh-taskify-chip-pending">待发送激活</span>
+          </span>
+        </Tooltip>
+      ))}
+      {persistent.length > 0 && (
         <button type="button" className="dsh-taskify-clear" onClick={() => void controller?.clearAnchors(taskifyRemote)}>
           清除全部
         </button>
       )}
-      {anchors.length > 0 && hostState.runtimeContext.available === false && (
+      {persistent.length > 0 && hostState.runtimeContext.available === false && (
         <span className="dsh-taskify-context-warning">⚠ 当前跨轮指导不可用</span>
       )}
       {noop && <span className="dsh-taskify-noop">✓ 未发现需要额外锚定的约束</span>}

@@ -504,6 +504,25 @@ function statusForHostState(hostState) {
   }
   return hostState?.anchors?.length > 0 ? "anchored" : "ready";
 }
+function taskifyAnchorDockModel(hostState, currentDraft) {
+  const persistent = Array.isArray(hostState?.anchors) ? hostState.anchors.map((anchor) => ({
+    kind: "persistent",
+    key: anchor.id,
+    anchor
+  })) : [];
+  const bundle = hostState?.request?.phase === "armed" ? hostState.request.bundle : null;
+  const matchesDraft = bundle !== null && bundle.boundDraft === currentDraft;
+  const pending = matchesDraft ? bundle.anchors.map((anchor, index) => ({
+    kind: "pending",
+    key: `pending:${bundle.requestId}:${index}`,
+    anchor
+  })) : [];
+  return {
+    persistent,
+    pending,
+    noop: matchesDraft && bundle.anchors.length === 0
+  };
+}
 function cloneState(state) {
   return {
     ...state,
@@ -945,9 +964,17 @@ var CSS = `
   opacity: 0.62;
   border-style: dashed;
 }
+.dsh-taskify-chip[data-status="pending"] {
+  border-style: dotted;
+}
 .dsh-taskify-chip-text {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-taskify-chip-pending {
+  color: color-mix(in srgb, currentColor 68%, transparent);
+  font-size: 11px;
   white-space: nowrap;
 }
 .dsh-taskify-chip-action,
@@ -1015,13 +1042,18 @@ function tooltipFor({ busy, empty, unavailable, referenceBlocked, state, remoteR
   if (state.status === "error" && state.error) return state.error.message;
   return "\u4ECE\u5F53\u524D\u8349\u7A3F\u63D0\u53D6\u660E\u786E\u3001\u53EF\u8FFD\u6EAF\u7684\u786C\u7EA6\u675F";
 }
-function TaskifyButton({ sessionId, useInput, inputActions }) {
+function TaskifyButton({ sessionId, useSession, useInput, inputActions }) {
+  const running = useSession((s) => s.running);
   const input = useInput((s) => s);
   const controller = taskifySessionFor(sessionId);
   const state = useTaskifySession(sessionId);
   const liveRef = import_react.default.useRef({ draft: "", draftRev: -1 });
   const draft = input?.draft ?? "";
   const draftRev = input?.draftRev ?? -1;
+  const phase = input?.phase ?? "plain";
+  const previousPhaseRef = import_react.default.useRef(phase);
+  const previousRunningRef = import_react.default.useRef(running);
+  const suppressDraftInvalidationRef = import_react.default.useRef(false);
   liveRef.current = { draft, draftRev };
   import_react.default.useEffect(() => {
     if (controller && taskifyRemote) void controller.hydrate(taskifyRemote);
@@ -1030,10 +1062,25 @@ function TaskifyButton({ sessionId, useInput, inputActions }) {
     if (sessionId) releaseTaskifySession(sessionId);
   }, [sessionId]);
   import_react.default.useEffect(() => {
+    const phaseChanged = previousPhaseRef.current !== phase;
+    previousPhaseRef.current = phase;
+    if (phaseChanged) {
+      suppressDraftInvalidationRef.current = true;
+      queueMicrotask(() => {
+        suppressDraftInvalidationRef.current = false;
+      });
+    }
+  }, [phase, sessionId]);
+  import_react.default.useEffect(() => {
+    const turnSettled = previousRunningRef.current === true && running === false;
+    previousRunningRef.current = running;
+    if (turnSettled && controller && taskifyRemote) void controller.hydrate(taskifyRemote, { quiet: true });
+  }, [controller, running, sessionId]);
+  import_react.default.useEffect(() => {
+    if (phase !== "plain" || suppressDraftInvalidationRef.current) return;
     if (controller?.onDraftChanged(draft) && taskifyRemote) void controller.invalidate(taskifyRemote);
-  }, [controller, draft, sessionId]);
+  }, [controller, draft, phase, sessionId]);
   const empty = draft.trim() === "";
-  const phase = input?.phase ?? "plain";
   const unavailable = !input || phase === "adjudicating" || phase === "claimed" || phase === "submitting";
   const referenceBlocked = isReferenceBlocked(input?.occurrences ?? []);
   const busy = state?.status === "extracting" && !controller?.disposed;
@@ -1100,17 +1147,16 @@ function TaskifyAnchors({ sessionId, input }) {
   const controller = taskifySessionFor(sessionId);
   const hostState = state?.hostState;
   if (!state || !hostState) return null;
-  const anchors = hostState.anchors;
-  const noop = hostState.request.phase === "armed" && hostState.request.bundle.anchors.length === 0 && hostState.request.bundle.boundDraft === input?.draft;
-  if (anchors.length === 0 && !noop) return null;
+  const { persistent, pending, noop } = taskifyAnchorDockModel(hostState, input?.draft);
+  if (persistent.length === 0 && pending.length === 0 && !noop) return null;
   const mutate = (method, anchorId) => {
     if (!controller || !taskifyRemote) return;
     void controller[method](anchorId, taskifyRemote);
   };
-  return /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-anchors", "aria-label": "Taskify Session \u7EA6\u675F" }, anchors.map((anchor) => /* @__PURE__ */ import_react.default.createElement(
+  return /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-anchors", "aria-label": "Taskify Session \u7EA6\u675F" }, persistent.map(({ key, anchor }) => /* @__PURE__ */ import_react.default.createElement(
     import_dsh_client_ui_primitives.Tooltip,
     {
-      key: anchor.id,
+      key,
       label: `\u6765\u6E90\uFF1A\u201C${anchor.evidence}\u201D \xB7 Scope: Session \xB7 Status: ${anchor.status === "active" ? "Active" : "Paused"}`,
       side: "top"
     },
@@ -1133,7 +1179,15 @@ function TaskifyAnchors({ sessionId, input }) {
       },
       "\u79FB\u9664"
     ))
-  )), anchors.length > 0 && /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-clear", onClick: () => void controller?.clearAnchors(taskifyRemote) }, "\u6E05\u9664\u5168\u90E8"), anchors.length > 0 && hostState.runtimeContext.available === false && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-context-warning" }, "\u26A0 \u5F53\u524D\u8DE8\u8F6E\u6307\u5BFC\u4E0D\u53EF\u7528"), noop && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-noop" }, "\u2713 \u672A\u53D1\u73B0\u9700\u8981\u989D\u5916\u951A\u5B9A\u7684\u7EA6\u675F"));
+  )), pending.map(({ key, anchor }) => /* @__PURE__ */ import_react.default.createElement(
+    import_dsh_client_ui_primitives.Tooltip,
+    {
+      key,
+      label: `\u6765\u6E90\uFF1A\u201C${anchor.evidence}\u201D \xB7 Scope: Session \xB7 Status: Pending activation`,
+      side: "top"
+    },
+    /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-chip", "data-status": "pending", tabIndex: 0, "aria-label": `${anchor.text}\uFF1B\u5F85\u53D1\u9001\u6FC0\u6D3B` }, /* @__PURE__ */ import_react.default.createElement("span", { "aria-hidden": "true" }, "\u{1F512}"), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-chip-text" }, anchor.text), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-chip-pending" }, "\u5F85\u53D1\u9001\u6FC0\u6D3B"))
+  )), persistent.length > 0 && /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-clear", onClick: () => void controller?.clearAnchors(taskifyRemote) }, "\u6E05\u9664\u5168\u90E8"), persistent.length > 0 && hostState.runtimeContext.available === false && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-context-warning" }, "\u26A0 \u5F53\u524D\u8DE8\u8F6E\u6307\u5BFC\u4E0D\u53EF\u7528"), noop && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-noop" }, "\u2713 \u672A\u53D1\u73B0\u9700\u8981\u989D\u5916\u951A\u5B9A\u7684\u7EA6\u675F"));
 }
 var inject = ["slots", "remote"];
 async function apply(ctx) {

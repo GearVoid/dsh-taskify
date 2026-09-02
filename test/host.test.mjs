@@ -50,7 +50,10 @@ function fixture(chunks, { sessionId = 'session-1', flush = false, withAgent = t
     ctx,
     stateProjection: new TaskifyStateProjection(),
     dirtySessions: new Set(),
+    bindingSessions: new Set(),
+    contextSuppressions: new Map(),
     selectModel: () => ({ provider: 'test-provider', model: 'test-model' }),
+    bindPreStep: TaskifyService.prototype.bindPreStep,
     hydrateAgent: TaskifyService.prototype.hydrateAgent,
     hydrateSession: TaskifyService.prototype.hydrateSession,
     refreshState: TaskifyService.prototype.refreshState,
@@ -92,7 +95,7 @@ async function activate(fx, draft = '后端别动') {
     fx.service.stateProjection, fx.service.ctx, { agent: fx.agent },
     async () => ({ kind: 'enter', messages: [human, message] }),
   )
-  fx.session.append('user/message', message, { surfaceOp: 'append' })
+  fx.session.append('user/message', human, { surfaceOp: 'append' })
   return { armed, message, state: fx.service.stateProjection.getState('session-1') }
 }
 
@@ -252,6 +255,10 @@ test('matching pre-step allows the existing carrier once without duplicate contr
   assert.equal(fx.service.stateProjection.getState('session-1').request.phase, 'idle')
   assert.equal(fx.service.stateProjection.getState('session-1').anchors.length, 1)
   assert.equal(fx.service.stateProjection.getState('session-1').durability.status, 'unavailable')
+  assert.equal(
+    [...fx.session.events].filter(event => event.type === 'user/message' && event.data.id === carrier.id).length,
+    0,
+  )
 
   const secondHuman = createUserMessage({ content: [{ type: 'text', text: '第二轮' }], source: { kind: 'user' } })
   const second = await bindTaskifyInboxMessages(
@@ -261,6 +268,99 @@ test('matching pre-step allows the existing carrier once without duplicate contr
     async () => ({ kind: 'enter', messages: [secondHuman] }),
   )
   assert.deepEqual(second.messages, [secondHuman])
+})
+
+test('real rc.2 claim sequence replays an activated carrier without a loop-authored user message', async () => {
+  const fx = fixture(successfulChunks([
+    { text: '严禁新增任何依赖', evidence: '严禁新增任何依赖' },
+  ]), { flush: true })
+  const { message } = await activate(fx, '严禁新增任何依赖')
+
+  const taskifyMessages = [...fx.session.events]
+    .filter(event => event.type === 'user/message' && event.data.id === message.id)
+  assert.equal(taskifyMessages.length, 0)
+  assert.equal(fx.flushes(), 1)
+
+  const rebuilt = rebuildTaskifyState({
+    sessionId: 'session-1',
+    events: [...fx.session.events],
+    inbox: fx.inbox,
+    durabilityStatus: 'confirmed',
+  }).state
+  assert.equal(rebuilt.request.phase, 'idle')
+  assert.equal(rebuilt.revision, 3)
+  assert.equal(rebuilt.durability.status, 'confirmed')
+  assert.deepEqual(rebuilt.anchors.map(anchor => anchor.text), ['严禁新增任何依赖'])
+})
+
+test('pre-step binding survives runtime-context replay before the human message is persisted', async () => {
+  const fx = fixture(successfulChunks([
+    { text: '严禁新增任何依赖', evidence: '严禁新增任何依赖' },
+  ]))
+  await compile(fx, '严禁新增任何依赖')
+  const message = fx.inbox.claim('next-step', 1)[0]
+  const human = createUserMessage({
+    content: [{ type: 'text', text: '严禁新增任何依赖' }],
+    source: { kind: 'user' },
+  })
+  fx.service.dirtySessions.add('session-1')
+
+  const decision = await fx.service.bindPreStep.call(
+    fx.service,
+    { agent: fx.agent },
+    async () => {
+      const duringBinding = fx.service.refreshState.call(fx.service, 'session-1')
+      assert.equal(duringBinding.request.phase, 'armed')
+      return { kind: 'enter', messages: [human, message] }
+    },
+  )
+  assert.deepEqual(decision.messages, [human, message])
+  assert.equal(fx.service.bindingSessions.size, 0)
+  assert.equal(fx.service.stateProjection.getState('session-1').request.phase, 'idle')
+  assert.deepEqual(fx.service.stateProjection.getState('session-1').anchors.map(anchor => anchor.text), ['严禁新增任何依赖'])
+
+  fx.session.append('user/message', human, { surfaceOp: 'append' })
+  fx.service.dirtySessions.add('session-1')
+  const converged = fx.service.refreshState.call(fx.service, 'session-1')
+  assert.equal(converged.revision, 3)
+  assert.deepEqual(converged.anchors.map(anchor => anchor.text), ['严禁新增任何依赖'])
+})
+
+test('same-revision replay converges after a claimed carrier gains its human witness', async () => {
+  const fx = fixture(successfulChunks())
+  await compile(fx, '后端别动')
+  const message = fx.inbox.claim('next-step', 1)[0]
+  fx.service.dirtySessions.add('session-1')
+  const transient = fx.service.refreshState.call(fx.service, 'session-1')
+  assert.equal(transient.revision, 3)
+  assert.deepEqual(transient.anchors, [])
+
+  fx.session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: '后端别动' }],
+    source: { kind: 'user' },
+  }), { surfaceOp: 'append' })
+  fx.service.dirtySessions.add('session-1')
+  const converged = fx.service.refreshState.call(fx.service, 'session-1')
+  assert.equal(converged.revision, 3)
+  assert.deepEqual(converged.anchors.map(anchor => anchor.text), ['不修改后端'])
+  assert.equal(message.source.activationRevision, converged.revision)
+})
+
+test('replay revision advances preserve the live runtime-context registration metadata', async () => {
+  const fx = fixture(successfulChunks())
+  await compile(fx, '后端别动')
+  fx.service.stateProjection.observeRuntimeContext('session-1', 2, true)
+  fx.inbox.claim('next-step', 1)
+  fx.session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: '后端别动' }],
+    source: { kind: 'user' },
+  }), { surfaceOp: 'append' })
+  fx.service.dirtySessions.add('session-1')
+
+  const state = fx.service.refreshState.call(fx.service, 'session-1')
+  assert.equal(state.revision, 3)
+  assert.equal(state.runtimeContext.available, true)
+  assert.deepEqual(state.anchors.map(anchor => anchor.text), ['不修改后端'])
 })
 
 test('mismatched wake filters and requeues the same identity without consuming or bumping', async () => {
