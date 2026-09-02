@@ -1,5 +1,7 @@
 import { TaskifySession } from './task-runner.js'
 
+// Disposable browser controllers. Their hostState field is only a Remote snapshot
+// cache; deleting this Map never mutates authoritative Host domain state.
 const sessions = new Map()
 
 export function taskifySessionFor(sessionId) {
