@@ -2,80 +2,100 @@
 
 [简体中文（默认）](./README.md) | **English**
 
-## Help DeepSeek Harness remember what this task should do and what it must not change
+> **Stronger coding agents tend to do more. Taskify helps them remember what this task is allowed to do — and what must not change.**
 
-“Don't touch the backend.” “Keep every feature.” “Leave the API unchanged.” “Add no dependencies.” These boundaries are easy to lose over a long agent task.
-
-DSH Taskify does not rewrite your prompt. It uses one **🎯 Focus** to state what the current session is authorized to accomplish at most, and presents explicit hard constraints as reviewable **Persistent Anchors**. The active Focus and Anchors continue guiding the model throughout the session until you change their lifecycle state.
-
-> Make the dashboard look better. Don't touch the backend, don't remove any features, and don't add new dependencies.
-
-```text
-🎯 Focus: Improve the dashboard layout and visuals
-🔒 Do not modify the backend　 🔒 Preserve existing features　 🔒 Add no dependencies
-```
-
-**Focus defines the execution scope. Anchors pin what must not change. Your original prompt stays untouched.**
+Taskify does not rewrite the original prompt in the composer. It uses **🎯 Focus** to define the current task's execution scope and **🔒 Persistent Anchors** to preserve explicit hard constraints, keeping both available across turns in the current Session.
 
 ![DSH Taskify interaction demo](./assets/demo.gif)
+
+Example input:
+
+> Make the dashboard card layout tighter and cleaner. Don't touch the backend, don't add dependencies, and don't change anything else along the way.
+
+```text
+🎯 Focus
+Make the dashboard card layout tighter and cleaner
+
+🔒 Anchors
+Do not modify the backend
+Do not add dependencies
+Do not change other functionality
+```
+
+**The original prompt stays unchanged.**
 
 [![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
 
-## What's new in v0.4
+## Two things: Focus + Anchors
 
-v0.4 adds a Session Focus alongside Host-owned Persistent Anchors and renders both as continuing model guidance.
+### 🎯 Focus
 
-```text
-Current draft
-   ↓ click Taskify
-AI Focus suggestion (editable or dismissible) + pending Anchors
-   ↓ user confirms the suggestion (it never applies automatically)
-   ↓ send the matching raw message
-Host activates Persistent Anchors and applies the confirmed Focus after turn settle
-   ↓
-Active Focus + Anchors guide later turns
-   ↓
-User controls each lifecycle
-```
+Answers: **“How far is this task allowed to go?”**
 
-- Each Session has at most one Focus. Users can write it directly or confirm an AI suggestion.
-- An AI Focus suggestion is only a Client-visible draft. It becomes authoritative only after the user clicks “Set Focus.”
-- Focus supports Set, Edit, Pause, Resume, and Clear. Anchors support Pause, Resume, Remove, and Clear All.
-- The active Focus and active Anchors share the runtime context used on later turns.
-- Host state is authoritative; the Client is a disposable snapshot cache.
-- Known DSH Session Events and UserMessages provide replayable state without upstream changes.
-- Extraction excludes already represented constraints, with deterministic exact-text filtering for persistent/pending duplicates.
-- New sessions and forks do not inherit Focus or Anchors.
+Each Session has at most one Focus. Users can write it directly or accept an AI suggestion. A suggestion is only an editable, dismissible draft. It becomes the authoritative Focus only after user confirmation and never applies automatically.
+
+### 🔒 Persistent Anchors
+
+Answers: **“What must not change?”**
+
+Anchors are explicit hard constraints extracted from the current prompt. Every Anchor must include exact evidence from the user's words, and a Session can hold multiple Anchors.
 
 ## Install or update
 
 ```sh
 dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.4.0
-```
-
-Then restart DeepSeek Harness Web:
-
-```sh
 dsh web
 ```
 
-If an older version is installed, run the same `plugin add` command again and restart DSH Web to load both the new Host code and Client bundle.
+To upgrade an older installation, run `plugin add` again and restart DSH Web so it loads the new Host code and Client bundle.
 
-## Use
+## How it works
 
-1. Enter the raw task in DSH Web.
-2. Click `✨ Taskify`.
-3. Review the suggested Focus and Anchor chips with their shared “Pending” state.
-4. Accept, edit, or ignore the suggestion, or set Focus manually.
-5. Send through DSH's normal send button.
-6. When the matching message is accepted, Anchors become active; a confirmed Focus is applied after the Host request returns to idle.
+```text
+Write the original task
+   ↓
+Click ✨ Taskify
+   ↓
+AI suggests a Focus + extracts Anchors
+   ↓
+Confirm / edit / ignore the Focus
+   ↓
+Send the original prompt
+   ↓
+Focus + active Anchors continue into later turns
+```
 
-AI suggestions never apply automatically. Hover or focus a summarized Anchor to inspect its exact evidence. Active Anchors can be paused, resumed, removed individually, or cleared together. A draft with no explicit hard boundary is a valid no-op.
+- Taskify does not change the composer text or send anything for the user.
+- A Focus suggestion never applies automatically; it becomes the Session Focus only after confirmation.
+- Anchors come only from hard constraints the user explicitly stated in the current prompt.
+- Once active, Focus and Anchors guide later turns without requiring the user to repeat those boundaries.
 
-## Extraction contract
+Users can Set, Edit, Pause, Resume, or Clear Focus. They can also Pause, Resume, or Remove individual Anchors, or Clear All.
+
+## Why this exists
+
+- Boundaries written at the start of a long task can drift as the conversation grows.
+- Coding agents often refactor nearby code, add abstractions or fallbacks, or expand into adjacent features along the way.
+- Stronger agents are often more proactive, but “able to do more” does not mean “authorized to do more.”
+- Taskify is not meant to make the model less capable. It keeps the user's execution boundaries present.
+
+**Extract, don’t invent.** Anchors preserve explicit constraints without upgrading preferences into hard rules or inventing paths, dependencies, or APIs.
+
+**Persistence ≠ Enforcement.** Focus and Anchors are continuing model guidance, not a sandbox, policy engine, or mechanical interception layer.
+
+## Focus versus Persistent Anchors
+
+| | 🎯 Focus | 🔒 Persistent Anchors |
+|---|---|---|
+| Answers | What may this task do at most? | What must not change? |
+| Quantity | At most one per Session | Multiple per Session |
+| Source | Written by the user or confirmed from an AI suggestion | Explicit hard constraints in the current prompt |
+| Lifecycle | Set / Edit / Pause / Resume / Clear | Pause / Resume / Remove / Clear All |
+
+## Extraction and trust boundaries
 
 ```json
 {
@@ -88,36 +108,36 @@ AI suggestions never apply automatically. Hover or focus a summarized Anchor to 
 }
 ```
 
-Every Anchor requires exact evidence from the current draft. Preferences and softened language such as “try to” or “ideally” are not promoted to hard constraints. `anchors: []` is a valid success.
+Every Anchor must trace back to exact evidence in the current draft. Preferences and softened language such as “try to” or “ideally” are not promoted to hard constraints. `anchors: []` is a valid success.
+
+- **Literal Lock** protects code blocks, inline code, paths, URLs, IP/ports, versions, CLI tokens, and common identifiers.
+- **Provenance** requires evidence to be an exact substring of the current draft.
+- **Concrete Claim Guard** rejects invented paths, URLs, CLI tokens, versions, and obvious code identifiers.
 
 Taskify does not search the workspace, generate goals, plans, acceptance criteria, or engineering advice, and does not reimplement DSH `/goal`.
 
-## Focus versus Persistent Anchors
+## State and persistence boundaries
 
-| | 🎯 Focus | 🔒 Persistent Anchors |
-|---|---|---|
-| Answers | What may this session accomplish at most? | What must not change? |
-| Quantity | At most one per Session | Multiple per Session |
-| Source | Written by the user, or AI-suggested and user-confirmed | Extracted from the current prompt with exact evidence |
-| Lifecycle | Set / Edit / Pause / Resume / Clear | Pause / Resume / Remove / Clear All |
-| Authority | Only user actions can change Host Focus | Only user actions can change active Anchor state |
-
-Focus is continuing model guidance, not mechanical enforcement. It guides the model to stay within the confirmed execution scope, but does not intercept file writes, dependency installation, or Git operations.
-
-## State and safety boundaries
-
-- **Literal Lock** protects code, paths, URLs, IP/ports, versions, CLI tokens, and identifiers.
-- **Provenance** requires evidence to be an exact substring of the current draft.
-- **Concrete Claim Guard** rejects invented paths, URLs, CLI tokens, versions, and obvious identifiers.
-- **Revision / CAS** lets the Host reject stale mutations and return authoritative snapshots.
-- **Draft invalidation** affects only the pending/armed request and never deletes active Anchors.
-- **Durable replay** uses known DSH events when the persistence provider confirms its flush.
-- **Runtime guidance** uses the official `systemPrompt.context` seam for the active Focus and active Anchors; paused items are excluded.
-- **Session isolation** binds state to the exact session id.
+- **Host authoritative state** means the Client is only a disposable snapshot cache; refreshes, remounts, and replay converge on the Host.
+- **Revision / CAS** lets the Host reject stale writes and return the latest authoritative snapshot.
+- **Draft invalidation** affects only a pending/armed request and never deletes an active Focus or active Anchors.
+- **Durable replay** uses known DSH events when the persistence provider confirms its flush; failures and unavailable durability remain visible.
+- **Runtime guidance** supplies the active Focus and active Anchors through the official `systemPrompt.context` seam; paused items are excluded.
+- **Session isolation** binds state to the exact session id. New Sessions and forks do not inherit Focus or Anchors by default.
 
 ## Deliberate limits
 
-Focus and Persistent Anchors are model guidance, not filesystem or Git enforcement. v0.4 does not include dependency/file-write interception, automatic rollback, Git baselines, Minimal Diff Mode, semantic diff audits, native Goal integration, polling, watchState, WebSockets, multi-client realtime sync, or automatic completion expiry.
+Taskify is continuing model guidance, not mechanical enforcement. It currently does not include:
+
+- file-write interception;
+- dependency-installation interception;
+- automatic rollback;
+- Git baselines;
+- semantic diff audits;
+- native `/goal` replacement;
+- watchState, polling, or WebSockets;
+- multi-client realtime sync;
+- automatic task-completion detection.
 
 ## Compatibility
 
@@ -129,7 +149,7 @@ Focus and Persistent Anchors are model guidance, not filesystem or Git enforceme
 
 DSH remains in Developer Preview and may introduce compatibility changes.
 
-## Development
+## Development and tests
 
 ```sh
 pnpm install --frozen-lockfile
@@ -138,7 +158,19 @@ pnpm build
 pnpm pack:check
 ```
 
-The suite covers Focus suggestions and lifecycle controls, Anchor extraction and deduplication, literal preservation, provenance, draft races, Host revisions, durable replay, session isolation, combined runtime context, and turn-settled Client convergence.
+The suite covers Focus suggestions and lifecycle controls, Anchor extraction and deduplication, literal preservation, provenance, draft races, Host revisions, durable replay, Session isolation, combined runtime context, and turn-settled Client convergence.
+
+## Project structure
+
+```text
+src/host/       Host authority, activation binding, persistence, and runtime context
+src/client/     Taskify button, Focus/Anchor Dock, and Client snapshot convergence
+src/shared/     Compiler, Schema, Projection, and Session Runner
+scripts/        Client bundle build script
+test/           Node.js tests
+client.js       Generated browser bundle (do not edit by hand)
+cordis.patch.yml
+```
 
 See [`docs/`](./docs/) for historical architecture and implementation records.
 

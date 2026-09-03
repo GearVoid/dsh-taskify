@@ -2,97 +2,100 @@
 
 **简体中文（默认）** | [English](./README_EN.md)
 
-## 让 DeepSeek Harness 在长任务里记住“这次只做什么”和“什么不能动”
+> **Coding Agent 越强，越容易顺手做太多。Taskify 让它持续记住“这次只做什么”和“什么不能动”。**
 
-“后端别动”、“功能别删”、“API 保持不变”、“不要新增依赖”——这些边界经常埋在自然语言里，也最容易在长任务中逐轮漂移。
-
-DSH Taskify 不重写你的 Prompt。它用一个 **🎯 Focus** 表示当前 Session 最多要完成什么，并把你明确说过的硬约束显示为可审阅、可追溯的 **Persistent Anchors（持久锚点）**。Focus 与 active Anchors 会持续进入当前 Session 的模型上下文，直到你主动修改其生命周期。
-
-> 把 dashboard 做好看点，后端别动，功能别删，也不要增加新的依赖。
-
-```text
-🎯 Focus：调整 dashboard 的布局与视觉
-🔒 后端不修改　 🔒 保留现有功能　 🔒 不新增依赖
-```
-
-**Focus 管执行范围，Anchors 钉住不能改变的底线；原始 Prompt 一字不改。**
+Taskify 不改写 composer 里的原始 Prompt。它用 **🎯 Focus** 固定当前任务的执行范围，用 **🔒 Persistent Anchors（持久锚点）** 保留用户明确说过的硬约束，并让这些边界在当前 Session 中跨轮持续。
 
 ![DSH Taskify 交互演示](./assets/demo.gif)
+
+演示输入：
+
+> 把 dashboard 卡片布局改得更紧凑、整齐一点，后端别动，不要新增依赖，也别顺手改其他功能。
+
+```text
+🎯 Focus
+调整 dashboard 卡片布局，使其更紧凑、整齐
+
+🔒 Anchors
+不修改后端
+不新增依赖
+不处理其他功能
+```
+
+**原始 Prompt 保持不变。**
 
 [![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
 
-## v0.4 有什么不同
+## 两个东西：Focus + Anchors
 
-v0.4 在 Host-owned Persistent Anchors 之外增加 Session Focus，并把两者一起作为后续轮次的持续模型指导。
+### 🎯 Focus
 
-```text
-当前草稿
-   ↓ 点击 Taskify
-AI 建议 Focus（可编辑、可忽略）+ 待发送 Anchors
-   ↓ 用户确认 Focus 建议（不会自动生效）
-   ↓ 发送完全匹配的原始消息
-Host 激活 Persistent Anchors，并在 turn settle 后应用已确认的 Focus
-   ↓
-Focus + active Anchors 在后续每一轮进入模型上下文
-   ↓
-用户管理各自的生命周期
-```
+回答：**“这次最多做到哪里？”**
 
-- **一个 Session，一个 Focus**：Focus 是当前 Session 的用户授权执行边界，可手写设置，也可采用 AI 建议。
-- **建议必须确认**：AI Focus suggestion 只是 Client 可见草稿；只有用户点击“设为 Focus”后才会成为 Host authoritative Focus。
-- **完整生命周期**：Focus 支持 Set、Edit、Pause、Resume、Clear；Anchors 支持 Pause、Resume、Remove、Clear All。
-- **联合运行时指导**：后续轮次同时携带 active Focus 与 active Anchors。
-- **Host 权威状态**：Client 只是快照缓存；刷新、重挂载和事件重放后以 Host 为准。
-- **可恢复表示**：使用 DSH 已知的 Session Event 与 UserMessage 表示状态，不写自定义上游事件。
-- **Anchor 降噪**：extraction 会排除已有约束，Host 与 Client 还会按 exact text 确定性过滤 persistent/pending 重复项。
-- **严格会话作用域**：新会话和 fork 不自动继承父会话 Focus 或 Anchors。
+一个 Session 最多一个 Focus。它可以由用户手写，也可以来自 AI suggestion。Suggestion 只是可编辑、可忽略的草稿，必须由用户确认后才会成为权威 Focus，绝不会自动生效。
 
-## 一行安装或更新
+### 🔒 Persistent Anchors
+
+回答：**“哪些东西不能变？”**
+
+Anchors 从当前 Prompt 中提取用户明确说出的硬约束。每个 Anchor 必须带有来自原文的 exact evidence；一个 Session 可以有多个 Anchors。
+
+## 安装或更新
 
 ```sh
 dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.4.0
-```
-
-然后重新启动 DeepSeek Harness Web：
-
-```sh
 dsh web
 ```
 
-如果已经安装旧版本，重新执行同一条 `plugin add` 命令并重启 DSH Web，以加载新的 Host 代码和 Client bundle。
+如果已经安装旧版本，重新执行 `plugin add` 并重启 DSH Web，以加载新的 Host 代码和 Client bundle。
 
-## 使用方法
-
-1. 在 DSH Web 输入原始任务。
-2. 点击 `✨ Taskify`。
-3. 核对 AI 建议的 Focus 与带有共享“待发送”状态的 Anchor Chips。
-4. Focus 建议可直接确认、编辑后确认或忽略；也可以手写设置 Focus。
-5. 使用 DSH 原有发送按钮发送原始消息。
-6. 发送完成后，Anchors 变为当前 Session 的 active 持久约束；已确认的 Focus 在 Host request 回到 idle 后生效。
-
-例如输入：
-
-> dashboard 太乱了，帮我整理下，后端别动，功能也别删。
-
-Taskify 不修改输入框内容，只显示独立的 Focus 建议与 Anchors：
+## 它怎么工作
 
 ```text
-🎯 建议 Focus：整理 dashboard 布局
-🔒 不修改后端　🔒 保留现有功能　· 待发送
+写原始任务
+   ↓
+点击 ✨ Taskify
+   ↓
+AI 建议 Focus + 提取 Anchors
+   ↓
+用户确认 / 编辑 / 忽略 Focus
+   ↓
+发送原始 Prompt
+   ↓
+Focus + active Anchors 持续进入后续轮次
 ```
 
-AI 建议不会自动写入 Host Focus。只有用户确认后，它才会通过现有 Focus mutation 成为权威状态。发送后，active Focus 与 Anchors 会继续显示在下一轮输入框。Anchor 归纳文本与原文不同时，悬停或聚焦 Chip 可查看精确 evidence；active Anchor 可暂停、恢复、单独删除，也可以全部清空。
+- Taskify 不修改 composer 中的原始文本，也不替用户自动发送。
+- Focus suggestion 不自动生效；只有用户确认后才会成为当前 Session 的 Focus。
+- Anchors 只来自用户在当前 Prompt 中明确说过的硬约束。
+- 激活后，Focus 与 Anchors 会持续指导后续轮次，无需反复重写这些边界。
 
-如果当前输入没有明确硬约束，Taskify 会正常显示：
+用户可以 Set、Edit、Pause、Resume 或 Clear Focus；也可以 Pause、Resume、Remove 单个 Anchor，或 Clear All。
 
-```text
-✓ 未发现需要额外锚定的约束
-```
+## 为什么会需要这个
 
-## 提取规则
+- 长任务中，开头写下的边界很容易随着轮次增加而漂移。
+- Coding Agent 往往会顺手重构、补抽象、加 fallback，或把修改扩展到邻近功能。
+- 更强的 Agent 通常更主动，但“能做更多”不等于“用户授权它做更多”。
+- Taskify 的目标不是让模型变笨，而是持续保留用户确认的执行边界。
+
+**Extract, don’t invent.** Anchors 只提取明确约束，不把偏好升级成硬规则，也不凭空补充路径、依赖或 API。
+
+**Persistence ≠ Enforcement.** Focus 与 Anchors 是持续的 model guidance，不是 sandbox、policy engine 或机械拦截层。
+
+## Focus 与 Persistent Anchors
+
+| | 🎯 Focus | 🔒 Persistent Anchors |
+|---|---|---|
+| 回答的问题 | 这次最多做到哪里 | 哪些东西不能变 |
+| 数量 | 每 Session 最多一个 | 每 Session 可多个 |
+| 来源 | 用户手写或确认 AI 建议 | 当前 Prompt 的明确硬约束 |
+| 生命周期 | Set / Edit / Pause / Resume / Clear | Pause / Resume / Remove / Clear All |
+
+## 提取与可信边界
 
 ```json
 {
@@ -105,42 +108,36 @@ AI 建议不会自动写入 Host Focus。只有用户确认后，它才会通过
 }
 ```
 
-每个 Anchor 必须能追溯到当前草稿中的精确 evidence。`尽量简单`、`最好别碰后端` 等偏好性或弱化表达不会被升级为硬约束。`anchors: []` 是合法成功结果。
-
-Taskify 不搜索工作区，不生成目标、计划、验收标准或工程建议，也不重新实现 DSH `/goal`。
-
-## Focus 与 Persistent Anchors
-
-| | 🎯 Focus | 🔒 Persistent Anchors |
-|---|---|---|
-| 回答的问题 | 这次最多做到哪里 | 哪些东西不能变 |
-| 数量 | 一个 Session 最多一个 | 一个 Session 可有多个 |
-| 来源 | 用户手写，或 AI 建议后由用户确认 | 从当前 Prompt 提取，必须带 exact evidence |
-| 生命周期 | Set / Edit / Pause / Resume / Clear | Pause / Resume / Remove / Clear All |
-| 权威性 | 只有用户操作才能改变 Host Focus | 只有用户操作才能改变 active Anchor 状态 |
-
-Focus 是持续的 model guidance，不是 mechanical enforcement。它帮助模型把工作限制在用户确认的执行范围内，但不会拦截文件写入、依赖安装或 Git 操作。
-
-## 状态与安全边界
+每个 Anchor 都必须能追溯到当前草稿中的精确 evidence。`尽量简单`、`最好别碰后端` 等偏好或弱化表达不会被升级成硬约束；`anchors: []` 是合法成功结果。
 
 - **Literal Lock**：保护代码块、行内代码、路径、URL、IP/端口、版本、CLI 和常见标识符。
 - **Provenance**：evidence 必须是当前草稿的精确子串。
 - **Concrete Claim Guard**：Anchor 不能凭空加入新路径、URL、CLI、版本或明显代码标识符。
-- **Revision / CAS**：Host 使用 revision 检查拒绝过期写入，冲突后 Client 重新读取权威快照。
-- **Draft invalidation**：修改尚未发送的原始草稿只会使 pending/armed request 失效，不会删除 active Anchors。
-- **Durable replay**：当 DSH persistence provider 确认 flush 时，状态可以通过已知事件重放恢复；失败或不可确认时会明确降级。
-- **Runtime guidance**：后续轮次通过 DSH 官方 `systemPrompt.context` 同时获得当前 active Focus 与 active Anchors；paused 项不进入模型上下文。
-- **Session isolation**：状态按精确 session id 隔离，默认不跨新会话或 fork 传播。
+
+Taskify 不搜索工作区，不生成目标、计划、验收标准或工程建议，也不重新实现 DSH `/goal`。
+
+## 状态与持久化边界
+
+- **Host authoritative state**：Client 只是可丢弃的快照缓存；刷新、重挂载和事件重放后以 Host 为准。
+- **Revision / CAS**：Host 拒绝过期写入；冲突后 Client 重新读取权威快照。
+- **Draft invalidation**：修改尚未发送的草稿只会使 pending/armed request 失效，不会删除 active Focus 或 Anchors。
+- **Durable replay**：当 DSH persistence provider 确认 flush 时，状态可通过已知事件重放恢复；失败或不可确认时会明确降级。
+- **Runtime guidance**：后续轮次通过 DSH 官方 `systemPrompt.context` 获得 active Focus 与 active Anchors；paused 项不会进入上下文。
+- **Session isolation**：状态按精确 session id 隔离，新 Session 和 fork 默认不继承 Focus 或 Anchors。
 
 ## 当前不做什么
 
-Focus 与 Persistent Anchors 都是持续的模型指导，不是文件系统或 Git 层面的强制执行。v0.4 不包含：
+Taskify 是持续的 model guidance，不是 mechanical enforcement。当前不包含：
 
-- 依赖安装拦截、文件写入拦截或自动回滚；
-- Git baseline、Minimal Diff Mode 或 semantic diff audit；
-- 原生 Goal 生命周期集成；
-- watchState、轮询、WebSocket 或多客户端实时同步；
-- 自动判断任务完成并过期 Anchor。
+- 文件写入拦截；
+- 依赖安装拦截；
+- 自动 rollback；
+- Git baseline；
+- semantic diff audit；
+- native `/goal` replacement；
+- watchState、polling 或 WebSocket；
+- 多 Client 实时同步；
+- 自动任务完成判断。
 
 ## 兼容性
 
@@ -161,12 +158,12 @@ pnpm build
 pnpm pack:check
 ```
 
-当前测试覆盖 Focus suggestion 与生命周期、Anchor 提取及去重、Literal preservation、Provenance、草稿竞态、Host revision、durable replay、Session 隔离、联合运行时上下文以及 turn-settled Client convergence。
+当前测试覆盖 Focus suggestion 与生命周期、Anchor 提取及去重、Literal preservation、Provenance、草稿竞态、Host revision、durable replay、Session 隔离、联合 runtime context，以及 turn-settled Client convergence。
 
 ## 项目结构
 
 ```text
-src/host/       Host 权威状态、激活绑定、持久化与运行时上下文
+src/host/       Host 权威状态、激活绑定、持久化与 runtime context
 src/client/     Taskify 按钮、Focus/Anchor Dock 与 Client 快照收敛
 src/shared/     Compiler、Schema、Projection、Session Runner
 scripts/        Client bundle 构建脚本
