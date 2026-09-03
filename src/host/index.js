@@ -15,6 +15,14 @@ import {
   COMPILER_TIMEOUT_MS,
   parseCompilerOutput,
 } from '../shared/compiler.js'
+import {
+  buildFocusSuggestionUserPayload,
+  FOCUS_SUGGESTION_MAX_TOKENS,
+  FOCUS_SUGGESTION_SYSTEM_PROMPT,
+  FOCUS_SUGGESTION_TEMPERATURE,
+  FOCUS_SUGGESTION_TIMEOUT_MS,
+  parseFocusSuggestionOutput,
+} from '../shared/focus-suggestion.js'
 import { MAX_RESULT_CHARS } from '../shared/literal-lock.js'
 import {
   buildLifecycleNotice,
@@ -324,6 +332,88 @@ export class TaskifyService extends Service {
     return { provider: selection.provider, model: selection.model }
   }
 
+  async suggestFocus(request, signal) {
+    const requestId = request.requestId
+    if (typeof this.refreshState === 'function') this.refreshState(request.sessionId)
+    const initialState = this.stateProjection.getState(request.sessionId)
+    if (initialState.focus !== null) {
+      return { ok: true, requestId, suggestion: null }
+    }
+    const extractedAnchors = initialState.request.phase === 'armed'
+      && initialState.request.bundle.requestId === requestId
+      && initialState.request.bundle.sourceDraft === request.sourceDraft
+      ? initialState.request.bundle.anchors
+      : []
+    const selection = this.selectModel(request.sessionId)
+    if (!selection) {
+      return { ok: false, requestId, error: { code: 'no-model', message: '当前没有可用的模型配置。' } }
+    }
+
+    let timedOut = false
+    const timeoutController = new AbortController()
+    const timer = setTimeout(() => {
+      timedOut = true
+      timeoutController.abort()
+    }, FOCUS_SUGGESTION_TIMEOUT_MS)
+    const options = {
+      provider: selection.provider,
+      model: selection.model,
+      system: FOCUS_SUGGESTION_SYSTEM_PROMPT,
+      temperature: FOCUS_SUGGESTION_TEMPERATURE,
+      maxTokens: FOCUS_SUGGESTION_MAX_TOKENS,
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: buildFocusSuggestionUserPayload(request.sourceDraft, extractedAnchors) }],
+        source: { kind: 'plugin', plugin: PLUGIN_NAME },
+      })],
+      signal: combinedSignal(signal, timeoutController),
+    }
+
+    let text = ''
+    let failure = ''
+    let failureCode = 'llm-failed'
+    let finished = false
+    try {
+      for await (const chunk of this.ctx.llm.stream(options)) {
+        if (chunk.type === 'text-delta') text += chunk.text
+        if (chunk.type === 'finish') {
+          finished = chunk.reason.kind === 'stop'
+          if (chunk.reason.kind === 'max-tokens') {
+            failureCode = 'max-tokens'
+            failure = 'Focus suggestion 输出达到长度上限。'
+          } else if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') {
+            failure = chunk.reason.failure?.message || 'Focus suggestion 模型调用未完成。'
+          } else if (chunk.reason.kind !== 'stop') {
+            failureCode = 'incomplete-result'
+            failure = 'Focus suggestion 模型未正常结束。'
+          }
+        }
+      }
+      if (!finished && !failure) {
+        failureCode = 'incomplete-result'
+        failure = 'Focus suggestion 模型响应未包含完整结束标记。'
+      }
+    } catch (error) {
+      failure = messageOf(error, 'Focus suggestion 模型调用失败。')
+    } finally {
+      clearTimeout(timer)
+    }
+
+    if (signal?.aborted === true) return { ok: false, requestId, error: { code: 'aborted', message: 'Taskify 已取消。' } }
+    if (timedOut) return { ok: false, requestId, error: { code: 'timeout', message: 'Focus suggestion 超时。' } }
+    if (failure) return { ok: false, requestId, error: { code: failureCode, message: failure } }
+    if (!text.trim()) return { ok: false, requestId, error: { code: 'empty-result', message: '模型未返回 Focus suggestion。' } }
+    if (text.length > MAX_RESULT_CHARS) {
+      return { ok: false, requestId, error: { code: 'too-long', message: 'Focus suggestion 结果超过长度上限。' } }
+    }
+    const parsed = parseFocusSuggestionOutput(text, request.sourceDraft, extractedAnchors)
+    if (!parsed.ok) return { ok: false, requestId, error: parsed.error }
+    if (typeof this.refreshState === 'function') this.refreshState(request.sessionId)
+    if (this.stateProjection.getState(request.sessionId).focus !== null) {
+      return { ok: true, requestId, suggestion: null }
+    }
+    return { ok: true, requestId, suggestion: parsed.suggestion }
+  }
+
   async compile(request, signal) {
     const requestId = request.requestId
     if (typeof this.refreshState === 'function') this.refreshState(request.sessionId)
@@ -373,7 +463,13 @@ export class TaskifyService extends Service {
       temperature: COMPILER_TEMPERATURE,
       maxTokens: COMPILER_MAX_TOKENS,
       messages: [createUserMessage({
-        content: [{ type: 'text', text: buildCompilerUserPayload({ draft: request.draft }) }],
+        content: [{
+          type: 'text',
+          text: buildCompilerUserPayload({
+            draft: request.draft,
+            existingAnchorTexts: begun.state.anchors.map(anchor => anchor.text),
+          }),
+        }],
         source: { kind: 'plugin', plugin: PLUGIN_NAME },
       })],
       signal: combinedSignal(signal, timeoutController),
@@ -421,8 +517,10 @@ export class TaskifyService extends Service {
       lock: { nonce: request.nonce, locks: request.literals },
     })
     if (!parsed.ok) return failPending(parsed.error.code, parsed.error.message)
+    const existingAnchorTexts = new Set(begun.state.anchors.map(anchor => anchor.text))
+    const newAnchors = parsed.anchors.filter(anchor => !existingAnchorTexts.has(anchor.text))
 
-    if (parsed.anchors.length === 0) {
+    if (newAnchors.length === 0) {
       const armed = this.stateProjection.update(request.sessionId, pendingRevision, {
         type: 'arm', requestId, anchors: [], carrier: null, durabilityStatus: 'unavailable',
       })
@@ -436,10 +534,10 @@ export class TaskifyService extends Service {
       requestId,
       boundDraft: request.rawDraft,
       sourceDraft: request.sourceDraft,
-      anchors: parsed.anchors,
+      anchors: newAnchors,
     })
     try {
-      mergePersistentAnchors(begun.state.anchors, parsed.anchors, {
+      mergePersistentAnchors(begun.state.anchors, newAnchors, {
         bundleId: source.bundleId,
         activatedRevision: source.activationRevision,
         sessionId: request.sessionId,
@@ -448,7 +546,7 @@ export class TaskifyService extends Service {
       return failPending(error?.code ?? 'anchor-limit', error instanceof Error ? error.message : 'Persistent Anchor 数量超过上限。')
     }
     const message = createUserMessage({
-      content: [{ type: 'text', text: buildConstraintContract(parsed.anchors) }],
+      content: [{ type: 'text', text: buildConstraintContract(newAnchors) }],
       source,
     })
     const injected = await injectOrClassifyCommit(agent, message)
@@ -459,7 +557,7 @@ export class TaskifyService extends Service {
     const armed = this.stateProjection.update(request.sessionId, pendingRevision, {
       type: 'arm',
       requestId,
-      anchors: parsed.anchors,
+      anchors: newAnchors,
       carrier: { messageId: message.id, bundleId: source.bundleId, requestId },
       durabilityStatus: 'unavailable',
     })
@@ -531,10 +629,11 @@ export class TaskifyService extends Service {
       sessionId: request.sessionId,
       revision: nextRevision,
       anchors,
+      focus: compared.state.focus,
       operation,
     })
     const message = createUserMessage({
-      content: [{ type: 'text', text: buildLifecycleNotice(nextRevision, anchors) }],
+      content: [{ type: 'text', text: buildLifecycleNotice(nextRevision, anchors, compared.state.focus) }],
       source,
     })
     const injected = await injectOrClassifyCommit(agent, message)
@@ -562,6 +661,86 @@ export class TaskifyService extends Service {
   async resumeAnchor(request) { return this.mutatePersistentAnchors('resume', request) }
   async removeAnchor(request) { return this.mutatePersistentAnchors('remove', request) }
   async clearAnchors(request) { return this.mutatePersistentAnchors('clear', request) }
+
+  async mutateFocus(kind, request) {
+    if (typeof this.refreshState === 'function') this.refreshState(request.sessionId)
+    const compared = this.stateProjection.compare(request.sessionId, request.expectedRevision)
+    if (!compared.matches) return { ok: false, error: revisionConflict(compared.state), state: compared.state }
+    if (compared.state.request.phase !== 'idle') {
+      return {
+        ok: false,
+        error: { code: 'request-busy', message: '请先完成或取消当前 Taskify 提取绑定，再修改 Focus。' },
+        state: compared.state,
+      }
+    }
+
+    const current = compared.state.focus
+    let focus
+    if (kind === 'focus-set') {
+      if (current !== null) {
+        return { ok: false, error: { code: 'focus-exists', message: '当前 Session 已有 Focus，请使用 Edit。' }, state: compared.state }
+      }
+      focus = { text: request.text, status: 'active', scope: { kind: 'session', sessionId: request.sessionId } }
+    } else {
+      if (current === null) {
+        return { ok: false, error: { code: 'focus-not-found', message: '当前 Session 没有 Focus。' }, state: compared.state }
+      }
+      focus = structuredClone(current)
+      if (kind === 'focus-edit') {
+        if (focus.text === request.text) {
+          return { ok: false, error: { code: 'focus-unchanged', message: 'Focus 内容没有变化。' }, state: compared.state }
+        }
+        focus.text = request.text
+      } else if (kind === 'focus-pause' || kind === 'focus-resume') {
+        const status = kind === 'focus-pause' ? 'paused' : 'active'
+        if (focus.status === status) {
+          return { ok: false, error: { code: 'focus-state', message: `Focus 已经是 ${status} 状态。` }, state: compared.state }
+        }
+        focus.status = status
+      } else if (kind === 'focus-clear') {
+        focus = null
+      }
+    }
+
+    const agent = liveAgentOf(this.ctx, request.sessionId)
+    const nextRevision = compared.state.revision + 1
+    const source = createTaskifyStateUpdateSource({
+      sessionId: request.sessionId,
+      revision: nextRevision,
+      anchors: compared.state.anchors,
+      focus,
+      operation: { kind },
+    })
+    const message = createUserMessage({
+      content: [{ type: 'text', text: buildLifecycleNotice(nextRevision, compared.state.anchors, focus) }],
+      source,
+    })
+    const injected = await injectOrClassifyCommit(agent, message)
+    if (!injected.committed) {
+      return {
+        ok: false,
+        error: {
+          code: 'lifecycle-injection-unavailable',
+          message: messageOf(injected.error, 'Taskify 无法写入 Focus state record。'),
+        },
+        state: compared.state,
+      }
+    }
+
+    const updated = this.stateProjection.update(request.sessionId, compared.state.revision, {
+      type: 'replace-focus', focus, durabilityStatus: 'unavailable',
+    })
+    if (!updated.ok) return { ok: false, error: revisionConflict(updated.state), state: updated.state }
+    const checkpoint = await checkpointDurability(this.ctx, agent.session)
+    const observed = this.stateProjection.observeDurability(request.sessionId, updated.state.revision, checkpoint.status)
+    return { ok: true, state: observed.state }
+  }
+
+  async setFocus(request) { return this.mutateFocus('focus-set', request) }
+  async editFocus(request) { return this.mutateFocus('focus-edit', request) }
+  async pauseFocus(request) { return this.mutateFocus('focus-pause', request) }
+  async resumeFocus(request) { return this.mutateFocus('focus-resume', request) }
+  async clearFocus(request) { return this.mutateFocus('focus-clear', request) }
 }
 
 export default TaskifyService

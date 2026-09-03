@@ -41,6 +41,19 @@ module.exports = __toCommonJS(index_exports);
 var import_react = __toESM(require("react"), 1);
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 
+// src/client/display.js
+function normalizeDisplayWhitespace(value) {
+  return typeof value === "string" ? value.replace(/\s+/gu, " ").trim() : "";
+}
+function anchorProvenanceForDisplay(anchor) {
+  const evidence = typeof anchor?.evidence === "string" ? anchor.evidence : "";
+  if (normalizeDisplayWhitespace(evidence) === "" || normalizeDisplayWhitespace(anchor?.text) === normalizeDisplayWhitespace(evidence)) return null;
+  return {
+    title: "\u6765\u81EA\u4F60\u7684\u539F\u8BDD",
+    evidence
+  };
+}
+
 // src/shared/literal-lock.js
 var MAX_LITERALS = 900;
 var SENTINEL_PREFIX = "__DSH_TASKIFY_";
@@ -193,11 +206,15 @@ var MAX_ANCHORS = 8;
 var MAX_ANCHOR_TEXT_CHARS = 240;
 var MAX_EVIDENCE_CHARS = 320;
 
+// src/shared/focus-suggestion.js
+var MAX_FOCUS_SUGGESTION_CHARS = 400;
+
 // src/shared/lifecycle.js
 var MAX_PERSISTENT_ANCHORS = 16;
+var MAX_FOCUS_TEXT_CHARS = 2e3;
 
 // src/shared/state.js
-var TASKIFY_STATE_SCHEMA_VERSION = 2;
+var TASKIFY_STATE_SCHEMA_VERSION = 3;
 
 // src/shared/schema.js
 function isRecord(value) {
@@ -265,6 +282,20 @@ function parsePersistentAnchors(value, sessionId) {
     };
   });
 }
+function parseFocus(value, sessionId) {
+  if (value === null) return null;
+  requireRecord(value, "state.focus");
+  requireOnlyKeys(value, ["text", "status", "scope"], "state.focus");
+  const text = requireNonEmptyString(value.text, "state.focus.text");
+  if (text.length > MAX_FOCUS_TEXT_CHARS) throw new TypeError("state.focus.text is too long");
+  if (value.status !== "active" && value.status !== "paused") throw new TypeError("state.focus.status is invalid");
+  requireRecord(value.scope, "state.focus.scope");
+  requireOnlyKeys(value.scope, ["kind", "sessionId"], "state.focus.scope");
+  if (value.scope.kind !== "session" || value.scope.sessionId !== sessionId) {
+    throw new TypeError("state.focus.scope must match the exact session");
+  }
+  return { text, status: value.status, scope: { kind: "session", sessionId } };
+}
 function parseCarrier(value) {
   if (value === null || value === void 0) return null;
   requireRecord(value, "state.request.bundle.carrier");
@@ -328,6 +359,7 @@ var taskifyStateSnapshotSchema = {
       "goalIntegration",
       "request",
       "anchors",
+      "focus",
       "scope"
     ], "state");
     if (value.schemaVersion !== TASKIFY_STATE_SCHEMA_VERSION) throw new TypeError("state.schemaVersion is unsupported");
@@ -354,6 +386,7 @@ var taskifyStateSnapshotSchema = {
       goalIntegration: { available: false },
       request: parseRequest(value.request),
       anchors: parsePersistentAnchors(value.anchors, sessionId),
+      focus: parseFocus(value.focus, sessionId),
       scope: { kind: "session", sessionId }
     };
   }
@@ -397,6 +430,39 @@ function parseMutationResult(value, requestId) {
 var compileResultSchema = { parse(value) {
   return parseMutationResult(value, true);
 } };
+var focusSuggestionRequestSchema = {
+  parse(value) {
+    requireRecord(value, "request");
+    requireOnlyKeys(value, ["requestId", "sessionId", "sourceDraft"], "request");
+    const sourceDraft = requireNonEmptyString(value.sourceDraft, "sourceDraft");
+    if (sourceDraft.length > 32768) throw new TypeError("sourceDraft is too long");
+    return {
+      requestId: requireNonEmptyString(value.requestId, "requestId"),
+      sessionId: requireNonEmptyString(value.sessionId, "sessionId"),
+      sourceDraft
+    };
+  }
+};
+var focusSuggestionResultSchema = {
+  parse(value) {
+    requireRecord(value, "result");
+    if (typeof value.ok !== "boolean") throw new TypeError("result.ok must be a boolean");
+    requireOnlyKeys(value, value.ok ? ["ok", "requestId", "suggestion"] : ["ok", "requestId", "error"], "result");
+    const result2 = { ok: value.ok, requestId: requireNonEmptyString(value.requestId, "requestId") };
+    if (!value.ok) {
+      result2.error = parseError(value.error);
+      return result2;
+    }
+    if (value.suggestion !== null) {
+      const suggestion = requireNonEmptyString(value.suggestion, "suggestion");
+      if (suggestion.length > MAX_FOCUS_SUGGESTION_CHARS) throw new TypeError("suggestion is too long");
+      result2.suggestion = suggestion;
+    } else {
+      result2.suggestion = null;
+    }
+    return result2;
+  }
+};
 var invalidateRequestSchema = {
   parse(value) {
     requireRecord(value, "request");
@@ -420,6 +486,20 @@ var anchorMutationRequestSchema = {
 };
 var clearAnchorsRequestSchema = invalidateRequestSchema;
 var lifecycleMutationResultSchema = invalidateResultSchema;
+var focusTextMutationRequestSchema = {
+  parse(value) {
+    requireRecord(value, "request");
+    requireOnlyKeys(value, ["sessionId", "expectedRevision", "text"], "request");
+    const text = requireNonEmptyString(value.text, "text");
+    if (text.length > MAX_FOCUS_TEXT_CHARS) throw new TypeError("text is too long");
+    return {
+      sessionId: requireNonEmptyString(value.sessionId, "sessionId"),
+      expectedRevision: requireRevision(value.expectedRevision, "expectedRevision"),
+      text
+    };
+  }
+};
+var focusMutationRequestSchema = invalidateRequestSchema;
 var directRequest = (name, typeSymbol, schema) => ({ name, wire: name, source: "json", codec: { mode: "strict", typeSymbol, schema } });
 var result = (typeSymbol, schema) => ({ mode: "strict", typeSymbol: `dsh-taskify#${typeSymbol}`, schema });
 var descriptor = (method, requestType, requestSchema, resultType = "LifecycleMutationResult", resultSchema = lifecycleMutationResultSchema) => ({
@@ -436,24 +516,40 @@ var compileDescriptor = {
   ...descriptor("compile", "CompileRequest", compileRequestSchema, "CompileResult", compileResultSchema),
   cancellation: { parameter: "signal" }
 };
+var suggestFocusDescriptor = {
+  ...descriptor("suggestFocus", "FocusSuggestionRequest", focusSuggestionRequestSchema, "FocusSuggestionResult", focusSuggestionResultSchema),
+  cancellation: { parameter: "signal" }
+};
 var invalidateDescriptor = descriptor("invalidate", "InvalidateRequest", invalidateRequestSchema, "LifecycleMutationResult", invalidateResultSchema);
 var pauseDescriptor = descriptor("pauseAnchor", "AnchorMutationRequest", anchorMutationRequestSchema);
 var resumeDescriptor = descriptor("resumeAnchor", "AnchorMutationRequest", anchorMutationRequestSchema);
 var removeDescriptor = descriptor("removeAnchor", "AnchorMutationRequest", anchorMutationRequestSchema);
 var clearDescriptor = descriptor("clearAnchors", "ClearAnchorsRequest", clearAnchorsRequestSchema);
+var setFocusDescriptor = descriptor("setFocus", "FocusTextMutationRequest", focusTextMutationRequestSchema);
+var editFocusDescriptor = descriptor("editFocus", "FocusTextMutationRequest", focusTextMutationRequestSchema);
+var pauseFocusDescriptor = descriptor("pauseFocus", "FocusMutationRequest", focusMutationRequestSchema);
+var resumeFocusDescriptor = descriptor("resumeFocus", "FocusMutationRequest", focusMutationRequestSchema);
+var clearFocusDescriptor = descriptor("clearFocus", "FocusMutationRequest", focusMutationRequestSchema);
 var TYPERT_DESCRIPTORS = [
   getStateDescriptor,
   compileDescriptor,
+  suggestFocusDescriptor,
   invalidateDescriptor,
   pauseDescriptor,
   resumeDescriptor,
   removeDescriptor,
-  clearDescriptor
+  clearDescriptor,
+  setFocusDescriptor,
+  editFocusDescriptor,
+  pauseFocusDescriptor,
+  resumeFocusDescriptor,
+  clearFocusDescriptor
 ];
 var TYPERT_REMOTE_CONTRIBUTION = { package: "dsh-taskify", descriptors: TYPERT_DESCRIPTORS };
 var anchorDeclaration = "export interface Anchor { readonly text: string; readonly evidence: string }";
 var persistentDeclaration = 'export interface PersistentAnchor extends Anchor { readonly id: string; readonly status: "active" | "paused"; readonly scope: { readonly kind: "session"; readonly sessionId: string }; readonly activatedRevision: number }';
-var snapshotDeclaration = 'export interface TaskifyStateSnapshot { readonly schemaVersion: 2; readonly sessionId: string; readonly revision: number; readonly durability: { readonly status: "unavailable" | "confirmed" | "failed" }; readonly runtimeContext: { readonly available: boolean }; readonly goalIntegration: { readonly available: false }; readonly request: { readonly phase: "idle" } | { readonly phase: "pending"; readonly pending: { readonly requestId: string; readonly boundDraft: string; readonly sourceDraft: string } } | { readonly phase: "armed"; readonly bundle: { readonly requestId: string; readonly boundDraft: string; readonly sourceDraft: string; readonly anchors: readonly Anchor[]; readonly carrier: { readonly messageId: string; readonly bundleId: string; readonly requestId: string } | null } }; readonly anchors: readonly PersistentAnchor[]; readonly scope: { readonly kind: "session"; readonly sessionId: string } }';
+var focusDeclaration = 'export interface Focus { readonly text: string; readonly status: "active" | "paused"; readonly scope: { readonly kind: "session"; readonly sessionId: string } }';
+var snapshotDeclaration = 'export interface TaskifyStateSnapshot { readonly schemaVersion: 3; readonly sessionId: string; readonly revision: number; readonly durability: { readonly status: "unavailable" | "confirmed" | "failed" }; readonly runtimeContext: { readonly available: boolean }; readonly goalIntegration: { readonly available: false }; readonly request: { readonly phase: "idle" } | { readonly phase: "pending"; readonly pending: { readonly requestId: string; readonly boundDraft: string; readonly sourceDraft: string } } | { readonly phase: "armed"; readonly bundle: { readonly requestId: string; readonly boundDraft: string; readonly sourceDraft: string; readonly anchors: readonly Anchor[]; readonly carrier: { readonly messageId: string; readonly bundleId: string; readonly requestId: string } | null } }; readonly anchors: readonly PersistentAnchor[]; readonly focus: Focus | null; readonly scope: { readonly kind: "session"; readonly sessionId: string } }';
 var TYPERT_CONTRIBUTION = {
   package: "dsh-taskify",
   face: "host",
@@ -462,26 +558,34 @@ var TYPERT_CONTRIBUTION = {
     key: "taskify",
     exportName: "TaskifyService",
     summary: "Taskify persistent session-constraint service.",
-    description: "Owns revisioned session-scoped request and persistent-anchor state.",
+    description: "Owns revisioned session-scoped request, Focus, and persistent-anchor state.",
     tags: [],
     jsDoc: "/** Host-authoritative persistent Taskify state. */",
     members: [
       { kind: "method", name: "getState", signature: "async getState(request: GetStateRequest): Promise<TaskifyStateSnapshot>", summary: "Read exact-session Taskify state.", jsDoc: "/** Read exact-session Taskify state. */" },
       { kind: "method", name: "compile", signature: "async compile(request: CompileRequest, signal?: AbortSignal): Promise<CompileResult>", summary: "Extract and arm a constraint bundle.", jsDoc: "/** Extract and arm a constraint bundle. */" },
+      { kind: "method", name: "suggestFocus", signature: "async suggestFocus(request: FocusSuggestionRequest, signal?: AbortSignal): Promise<FocusSuggestionResult>", summary: "Generate a disposable Focus draft without mutating Host state.", jsDoc: "/** Suggest a non-authoritative Focus draft. */" },
       { kind: "method", name: "invalidate", signature: "async invalidate(request: InvalidateRequest): Promise<LifecycleMutationResult>", summary: "Invalidate only the pending request bundle.", jsDoc: "/** Invalidate the pending request bundle. */" },
-      ...["pauseAnchor", "resumeAnchor", "removeAnchor", "clearAnchors"].map((name) => ({ kind: "method", name, signature: `async ${name}(request: ${name === "clearAnchors" ? "ClearAnchorsRequest" : "AnchorMutationRequest"}): Promise<LifecycleMutationResult>`, summary: `${name} through an explicit user Remote mutation.`, jsDoc: `/** Explicit user lifecycle mutation: ${name}. */` }))
+      ...["pauseAnchor", "resumeAnchor", "removeAnchor", "clearAnchors"].map((name) => ({ kind: "method", name, signature: `async ${name}(request: ${name === "clearAnchors" ? "ClearAnchorsRequest" : "AnchorMutationRequest"}): Promise<LifecycleMutationResult>`, summary: `${name} through an explicit user Remote mutation.`, jsDoc: `/** Explicit user lifecycle mutation: ${name}. */` })),
+      ...["setFocus", "editFocus"].map((name) => ({ kind: "method", name, signature: `async ${name}(request: FocusTextMutationRequest): Promise<LifecycleMutationResult>`, summary: `${name} through an explicit user Remote mutation.`, jsDoc: `/** Explicit user lifecycle mutation: ${name}. */` })),
+      ...["pauseFocus", "resumeFocus", "clearFocus"].map((name) => ({ kind: "method", name, signature: `async ${name}(request: FocusMutationRequest): Promise<LifecycleMutationResult>`, summary: `${name} through an explicit user Remote mutation.`, jsDoc: `/** Explicit user lifecycle mutation: ${name}. */` }))
     ],
     types: [
       { name: "Anchor", declaration: anchorDeclaration },
       { name: "PersistentAnchor", declaration: persistentDeclaration },
+      { name: "Focus", declaration: focusDeclaration },
       { name: "TaskifyStateSnapshot", declaration: snapshotDeclaration },
       { name: "GetStateRequest", declaration: "export interface GetStateRequest { readonly sessionId: string }" },
       { name: "TaskifyError", declaration: "export interface TaskifyError { readonly code: string; readonly message: string }" },
       { name: "CompileRequest", declaration: "export interface CompileRequest { readonly requestId: string; readonly sessionId: string; readonly expectedRevision: number; readonly rawDraft: string; readonly sourceDraft: string; readonly draft: string; readonly nonce: string; readonly literals: readonly string[] }" },
       { name: "CompileResult", declaration: "export type CompileResult = { readonly ok: true; readonly requestId: string; readonly state: TaskifyStateSnapshot } | { readonly ok: false; readonly requestId: string; readonly error: TaskifyError; readonly state: TaskifyStateSnapshot }" },
+      { name: "FocusSuggestionRequest", declaration: "export interface FocusSuggestionRequest { readonly requestId: string; readonly sessionId: string; readonly sourceDraft: string }" },
+      { name: "FocusSuggestionResult", declaration: "export type FocusSuggestionResult = { readonly ok: true; readonly requestId: string; readonly suggestion: string | null } | { readonly ok: false; readonly requestId: string; readonly error: TaskifyError }" },
       { name: "InvalidateRequest", declaration: "export interface InvalidateRequest { readonly sessionId: string; readonly expectedRevision: number }" },
       { name: "AnchorMutationRequest", declaration: "export interface AnchorMutationRequest extends InvalidateRequest { readonly anchorId: string }" },
       { name: "ClearAnchorsRequest", declaration: "export interface ClearAnchorsRequest extends InvalidateRequest {}" },
+      { name: "FocusTextMutationRequest", declaration: "export interface FocusTextMutationRequest extends InvalidateRequest { readonly text: string }" },
+      { name: "FocusMutationRequest", declaration: "export interface FocusMutationRequest extends InvalidateRequest {}" },
       { name: "LifecycleMutationResult", declaration: "export type LifecycleMutationResult = { readonly ok: true; readonly state: TaskifyStateSnapshot } | { readonly ok: false; readonly error: TaskifyError; readonly state: TaskifyStateSnapshot }" }
     ]
   }] },
@@ -502,7 +606,7 @@ function statusForHostState(hostState) {
   if (hostState?.request?.phase === "armed") {
     return hostState.request.bundle.anchors.length === 0 ? "noop" : "anchored";
   }
-  return hostState?.anchors?.length > 0 ? "anchored" : "ready";
+  return hostState?.anchors?.length > 0 || hostState?.focus != null ? "anchored" : "ready";
 }
 function taskifyAnchorDockModel(hostState, currentDraft) {
   const persistent = Array.isArray(hostState?.anchors) ? hostState.anchors.map((anchor) => ({
@@ -512,12 +616,14 @@ function taskifyAnchorDockModel(hostState, currentDraft) {
   })) : [];
   const bundle = hostState?.request?.phase === "armed" ? hostState.request.bundle : null;
   const matchesDraft = bundle !== null && bundle.boundDraft === currentDraft;
-  const pending = matchesDraft ? bundle.anchors.map((anchor, index) => ({
+  const persistentTexts = new Set(persistent.map(({ anchor }) => anchor.text));
+  const pending = matchesDraft ? bundle.anchors.filter((anchor) => !persistentTexts.has(anchor.text)).map((anchor, index) => ({
     kind: "pending",
     key: `pending:${bundle.requestId}:${index}`,
     anchor
   })) : [];
   return {
+    focus: hostState?.focus ?? null,
     persistent,
     pending,
     noop: matchesDraft && bundle.anchors.length === 0
@@ -527,6 +633,7 @@ function cloneState(state) {
   return {
     ...state,
     hostState: state.hostState === null ? null : structuredClone(state.hostState),
+    pendingFocusAcceptance: state.pendingFocusAcceptance === null ? null : { ...state.pendingFocusAcceptance },
     error: state.error === null ? null : { ...state.error },
     notice: state.notice === null ? null : { ...state.notice }
   };
@@ -538,6 +645,9 @@ function readyState(noticeSeq, hostState = null) {
     hostState,
     requestStartDraft: null,
     requestStartDraftRev: null,
+    focusSuggestion: null,
+    focusSuggestionSourceDraft: null,
+    pendingFocusAcceptance: null,
     error: null,
     notice: null,
     noticeSeq
@@ -609,6 +719,7 @@ var TaskifySession = class {
   }
   acceptHostState(value, { preserveRequest = false } = {}) {
     const hostState = this.parseHostState(value);
+    const hasAuthoritativeFocus = hostState.focus !== null;
     this.state = {
       ...this.state,
       status: preserveRequest && this.isExtracting ? "extracting" : statusForHostState(hostState),
@@ -616,11 +727,14 @@ var TaskifySession = class {
       hostState,
       requestStartDraft: preserveRequest ? this.state.requestStartDraft : null,
       requestStartDraftRev: preserveRequest ? this.state.requestStartDraftRev : null,
+      focusSuggestion: hasAuthoritativeFocus ? null : this.state.focusSuggestion,
+      focusSuggestionSourceDraft: hasAuthoritativeFocus ? null : this.state.focusSuggestionSourceDraft,
+      pendingFocusAcceptance: hasAuthoritativeFocus ? null : this.state.pendingFocusAcceptance,
       error: null
     };
     return hostState;
   }
-  async hydrate(remote, { quiet = false } = {}) {
+  async hydrate(remote, { quiet = false, applyPendingFocus = false } = {}) {
     if (this.disposed || !remote?.getState) return null;
     this.remote = remote;
     const hydration = ++this.hydration;
@@ -628,8 +742,9 @@ var TaskifySession = class {
       const value = remoteValue(await remote.getState({ sessionId: this.sessionId }));
       if (this.disposed || hydration !== this.hydration) return null;
       const state = this.acceptHostState(value, { preserveRequest: this.isExtracting });
-      this.emit();
-      return state;
+      const applied = applyPendingFocus && await this.applyPendingFocusAcceptance(remote);
+      if (!applied) this.emit();
+      return this.state.hostState ?? state;
     } catch (error) {
       if (this.disposed || hydration !== this.hydration || quiet) return null;
       this.failLocal({
@@ -657,6 +772,7 @@ var TaskifySession = class {
     const generation = this.generation;
     const requestId = requestIdOf(this.sessionId, generation, this.seq);
     const expectedRevision = this.state.hostState.revision;
+    const shouldSuggestFocus = this.state.hostState.focus === null && Boolean(remote?.suggestFocus);
     const abortController = new AbortController();
     this.abortController = abortController;
     this.state = {
@@ -665,6 +781,9 @@ var TaskifySession = class {
       requestId,
       requestStartDraft: draft,
       requestStartDraftRev: draftRev,
+      focusSuggestion: null,
+      focusSuggestionSourceDraft: null,
+      pendingFocusAcceptance: null,
       error: null,
       notice: null
     };
@@ -705,13 +824,49 @@ var TaskifySession = class {
         currentDraft: live.draft,
         currentDraftRev: live.draftRev,
         carrier,
-        remote
+        remote,
+        getLiveDraft,
+        suggestionSignal: abortController.signal,
+        shouldSuggestFocus
       });
     };
     void run();
     return requestId;
   }
-  async settle({ generation, requestId, rawDraft, sourceDraft, currentDraft, currentDraftRev, carrier, remote }) {
+  async requestFocusSuggestion({ generation, requestId, rawDraft, draftRev, sourceDraft, remote, getLiveDraft, signal }) {
+    let value;
+    try {
+      value = remoteValue(await remote.suggestFocus({
+        requestId,
+        sessionId: this.sessionId,
+        sourceDraft
+      }, signal));
+    } catch {
+      return;
+    }
+    if (this.disposed || generation !== this.generation || !value || value.requestId !== requestId || value.ok !== true || value.suggestion !== null && (typeof value.suggestion !== "string" || value.suggestion.trim() === "")) return;
+    const live = typeof getLiveDraft === "function" ? getLiveDraft() : { draft: rawDraft, draftRev };
+    if (live.draft !== rawDraft || live.draftRev !== draftRev || this.state.hostState?.focus !== null || value.suggestion === null) return;
+    this.state = {
+      ...this.state,
+      focusSuggestion: value.suggestion,
+      focusSuggestionSourceDraft: rawDraft
+    };
+    this.emit();
+  }
+  async settle({
+    generation,
+    requestId,
+    rawDraft,
+    sourceDraft,
+    currentDraft,
+    currentDraftRev,
+    carrier,
+    remote,
+    getLiveDraft,
+    suggestionSignal,
+    shouldSuggestFocus
+  }) {
     if (this.disposed || generation !== this.generation || this.state.requestId !== requestId || !this.isExtracting) return;
     let value;
     let hostState;
@@ -764,6 +919,18 @@ var TaskifySession = class {
       notice: null
     };
     this.emit();
+    if (shouldSuggestFocus && hostState.focus === null && remote?.suggestFocus) {
+      void this.requestFocusSuggestion({
+        generation,
+        requestId,
+        rawDraft,
+        draftRev: requestStartDraftRev,
+        sourceDraft,
+        remote,
+        getLiveDraft,
+        signal: suggestionSignal
+      });
+    }
   }
   failLocal(error) {
     if (this.disposed) return;
@@ -812,7 +979,114 @@ var TaskifySession = class {
       return false;
     }
   }
-  async mutateAnchors(method, anchorId, remote = this.remote) {
+  async acceptFocusSuggestion(text, remote = this.remote) {
+    if (this.disposed) return false;
+    if (!remote?.setFocus || this.state.hostState === null) {
+      this.showNotice("Taskify Focus \u670D\u52A1\u5C1A\u672A\u5C31\u7EEA\u3002");
+      this.emit();
+      return false;
+    }
+    if (typeof text !== "string" || text.trim() === "") {
+      this.showNotice("Focus \u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A\u3002");
+      this.emit();
+      return false;
+    }
+    if (this.state.hostState.focus !== null) {
+      this.state.focusSuggestion = null;
+      this.state.focusSuggestionSourceDraft = null;
+      this.state.pendingFocusAcceptance = null;
+      this.showNotice("\u5F53\u524D Session \u5DF2\u5B58\u5728 authoritative Focus\uFF0C\u672A\u8986\u76D6\u3002");
+      this.emit();
+      return false;
+    }
+    this.remote = remote;
+    const suggestionSourceDraft = this.state.focusSuggestionSourceDraft;
+    this.state = {
+      ...this.state,
+      focusSuggestion: null,
+      focusSuggestionSourceDraft: null,
+      pendingFocusAcceptance: {
+        text,
+        sourceDraft: suggestionSourceDraft,
+        status: "waiting",
+        error: null
+      }
+    };
+    this.emit();
+    if (this.state.hostState.request.phase === "idle") await this.applyPendingFocusAcceptance(remote);
+    return true;
+  }
+  async applyPendingFocusAcceptance(remote = this.remote) {
+    const pending = this.state.pendingFocusAcceptance;
+    if (this.disposed || pending === null || pending.status !== "waiting") return false;
+    if (!remote?.setFocus || this.state.hostState === null) {
+      this.state.pendingFocusAcceptance = { ...pending, status: "error", error: "Taskify Focus \u670D\u52A1\u5C1A\u672A\u5C31\u7EEA\u3002" };
+      this.showNotice(this.state.pendingFocusAcceptance.error);
+      this.emit();
+      return true;
+    }
+    if (this.state.hostState.focus !== null) {
+      this.state.pendingFocusAcceptance = null;
+      this.emit();
+      return true;
+    }
+    if (this.state.hostState.request.phase !== "idle") return false;
+    this.state.pendingFocusAcceptance = { ...pending, status: "applying", error: null };
+    this.emit();
+    try {
+      const value = remoteValue(await remote.setFocus({
+        sessionId: this.sessionId,
+        expectedRevision: this.state.hostState.revision,
+        text: pending.text
+      }));
+      if (!value || typeof value.ok !== "boolean" || !value.state) throw new TypeError("invalid Focus mutation result");
+      this.acceptHostState(value.state);
+      if (this.state.hostState.focus !== null) {
+        this.state.pendingFocusAcceptance = null;
+        this.emit();
+        return true;
+      }
+      const message = value.ok ? "Host \u672A\u8FD4\u56DE authoritative Focus\uFF1B\u53EF\u91CD\u8BD5\u542F\u7528\u3002" : value.error?.message || NOTICE.STATE_CHANGED;
+      this.state.pendingFocusAcceptance = { ...pending, status: "error", error: message };
+      this.showNotice(message);
+      this.emit();
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Focus \u542F\u7528\u5931\u8D25\uFF0C\u53EF\u91CD\u8BD5\u3002";
+      this.state.pendingFocusAcceptance = { ...pending, status: "error", error: message };
+      this.showNotice(message);
+      this.emit();
+      return true;
+    }
+  }
+  async retryPendingFocusAcceptance(remote = this.remote) {
+    const pending = this.state.pendingFocusAcceptance;
+    if (pending === null) {
+      this.showNotice("\u6CA1\u6709\u5F85\u542F\u7528\u7684 Focus\u3002");
+      this.emit();
+      return false;
+    }
+    this.state.pendingFocusAcceptance = { ...pending, status: "waiting", error: null };
+    this.emit();
+    if (this.state.hostState?.request.phase !== "idle") {
+      this.showNotice("Focus \u5DF2\u786E\u8BA4\uFF0C\u5C06\u5728\u5F53\u524D Taskify request \u53D1\u9001\u5E76\u6FC0\u6D3B\u540E\u542F\u7528\u3002");
+      this.emit();
+      return true;
+    }
+    await this.applyPendingFocusAcceptance(remote);
+    return this.state.hostState?.focus != null;
+  }
+  clearPendingFocusAcceptance() {
+    if (this.state.pendingFocusAcceptance === null) {
+      this.showNotice("\u6CA1\u6709\u5F85\u53D6\u6D88\u7684 Focus\u3002");
+      this.emit();
+      return false;
+    }
+    this.state.pendingFocusAcceptance = null;
+    this.emit();
+    return true;
+  }
+  async mutateState(method, fields, remote = this.remote) {
     if (this.disposed || !remote?.[method]) return false;
     this.remote = remote;
     if (this.state.hostState === null) {
@@ -822,7 +1096,7 @@ var TaskifySession = class {
     const request = {
       sessionId: this.sessionId,
       expectedRevision: this.state.hostState.revision,
-      ...anchorId === void 0 ? {} : { anchorId }
+      ...fields
     };
     try {
       const value = remoteValue(await remote[method](request));
@@ -841,6 +1115,9 @@ var TaskifySession = class {
       return false;
     }
   }
+  mutateAnchors(method, anchorId, remote = this.remote) {
+    return this.mutateState(method, anchorId === void 0 ? {} : { anchorId }, remote);
+  }
   pauseAnchor(anchorId, remote) {
     return this.mutateAnchors("pauseAnchor", anchorId, remote);
   }
@@ -853,6 +1130,27 @@ var TaskifySession = class {
   clearAnchors(remote) {
     return this.mutateAnchors("clearAnchors", void 0, remote);
   }
+  setFocus(text, remote) {
+    return this.mutateState("setFocus", { text }, remote);
+  }
+  editFocus(text, remote) {
+    return this.mutateState("editFocus", { text }, remote);
+  }
+  pauseFocus(remote) {
+    return this.mutateState("pauseFocus", {}, remote);
+  }
+  resumeFocus(remote) {
+    return this.mutateState("resumeFocus", {}, remote);
+  }
+  clearFocus(remote) {
+    return this.mutateState("clearFocus", {}, remote);
+  }
+  ignoreFocusSuggestion() {
+    if (this.state.focusSuggestion === null) return;
+    this.state.focusSuggestion = null;
+    this.state.focusSuggestionSourceDraft = null;
+    this.emit();
+  }
   cancel() {
     if (this.disposed || !this.isExtracting) return;
     this.generation += 1;
@@ -863,7 +1161,18 @@ var TaskifySession = class {
   }
   /** Returns true when the current Host-owned pending/armed result needs explicit invalidation. */
   onDraftChanged(currentDraft) {
-    if (this.disposed || this.isExtracting) return false;
+    if (this.disposed) return false;
+    if (this.state.focusSuggestion !== null && currentDraft !== this.state.focusSuggestionSourceDraft) {
+      this.state.focusSuggestion = null;
+      this.state.focusSuggestionSourceDraft = null;
+      this.emit();
+    }
+    if (this.state.pendingFocusAcceptance !== null && this.state.pendingFocusAcceptance.sourceDraft !== null && currentDraft !== this.state.pendingFocusAcceptance.sourceDraft) {
+      this.state.pendingFocusAcceptance = null;
+      this.showNotice("\u8349\u7A3F\u5DF2\u53D8\u5316\uFF0C\u5F85\u542F\u7528\u7684 Focus \u5DF2\u53D6\u6D88\u3002");
+      this.emit();
+    }
+    if (this.isExtracting) return false;
     const boundDraft = this.state.hostState?.request.phase === "armed" ? this.state.hostState.request.bundle.boundDraft : this.state.hostState?.request.phase === "pending" ? this.state.hostState.request.pending.boundDraft : null;
     if (boundDraft !== null && currentDraft !== boundDraft) return true;
     if (this.state.status === "error" && currentDraft !== this.state.requestStartDraft) {
@@ -936,72 +1245,235 @@ var CSS = `
   line-height: 1;
   flex: none;
 }
-.dsh-taskify-anchors {
+.dsh-taskify-dock {
   box-sizing: border-box;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 5px;
   width: 100%;
   max-width: var(--dsh-composer-card-max-width, 100%);
   margin-inline: auto;
-  padding: 2px 0;
+  padding: 3px 1px;
 }
-.dsh-taskify-chip {
-  display: inline-flex;
+.dsh-taskify-focus-layer,
+.dsh-taskify-anchor-layer {
+  box-sizing: border-box;
+  width: 100%;
+}
+.dsh-taskify-focus-layer {
+  min-height: 26px;
+}
+.dsh-taskify-focus-current {
+  display: flex;
   align-items: center;
-  gap: 5px;
-  max-width: min(100%, 440px);
-  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 6%, transparent);
-  padding: 4px 9px;
-  font-size: 12px;
-  line-height: 1.25;
-  cursor: default;
+  gap: 7px;
+  min-width: 0;
+  padding: 2px 4px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.4;
 }
-.dsh-taskify-chip[data-status="paused"] {
-  opacity: 0.62;
-  border-style: dashed;
+.dsh-taskify-focus-current[data-status="paused"] {
+  color: color-mix(in srgb, currentColor 66%, transparent);
 }
-.dsh-taskify-chip[data-status="pending"] {
-  border-style: dotted;
-}
-.dsh-taskify-chip-text {
+.dsh-taskify-focus-icon { flex: none; }
+.dsh-taskify-focus-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dsh-taskify-chip-pending {
+.dsh-taskify-focus-status,
+.dsh-taskify-pending-status {
+  flex: none;
+  color: color-mix(in srgb, currentColor 60%, transparent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.dsh-taskify-focus-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  margin-inline-start: auto;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.dsh-taskify-focus-current:hover .dsh-taskify-focus-actions,
+.dsh-taskify-focus-current:focus-within .dsh-taskify-focus-actions {
+  opacity: 1;
+}
+.dsh-taskify-focus-set {
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 3px 4px;
+}
+.dsh-taskify-focus-set:hover,
+.dsh-taskify-focus-set:focus-visible {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.dsh-taskify-anchor-layer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dsh-taskify-anchor-list {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.dsh-taskify-anchor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(100%, 440px);
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1.25;
+  cursor: default;
+}
+.dsh-taskify-anchor-chip[data-status="paused"] {
+  opacity: 0.62;
+  border-style: dashed;
+}
+.dsh-taskify-anchor-chip[data-status="pending"] {
+  border-style: dotted;
+}
+.dsh-taskify-anchor-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-taskify-anchor-paused {
   color: color-mix(in srgb, currentColor 68%, transparent);
   font-size: 11px;
   white-space: nowrap;
 }
+.dsh-taskify-anchor-actions {
+  display: inline-flex;
+  gap: 2px;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-width 140ms ease, opacity 120ms ease;
+}
+.dsh-taskify-anchor-chip:hover .dsh-taskify-anchor-actions,
+.dsh-taskify-anchor-chip:focus-within .dsh-taskify-anchor-actions {
+  max-width: 112px;
+  opacity: 1;
+}
+.dsh-taskify-provenance {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 320px;
+}
+.dsh-taskify-provenance-evidence {
+  white-space: pre-wrap;
+}
 .dsh-taskify-chip-action,
 .dsh-taskify-clear {
   border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 9%, transparent);
+  border-radius: 6px;
+  background: transparent;
   color: inherit;
   cursor: pointer;
   font: inherit;
   line-height: 1;
-  padding: 3px 5px;
+  padding: 4px 5px;
 }
 .dsh-taskify-chip-action:hover,
 .dsh-taskify-chip-action:focus-visible,
 .dsh-taskify-clear:hover,
 .dsh-taskify-clear:focus-visible {
-  background: color-mix(in srgb, currentColor 16%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.dsh-taskify-clear {
+  color: color-mix(in srgb, currentColor 64%, transparent);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.25;
+  padding: 3px 4px;
 }
 .dsh-taskify-context-warning {
   color: #b26a00;
   font-size: 12px;
 }
+.dsh-taskify-focus-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 1px 3px;
+}
+.dsh-taskify-focus-editor textarea {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  resize: vertical;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 8px;
+  outline: none;
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  color: inherit;
+  font: inherit;
+  padding: 7px 9px;
+}
+.dsh-taskify-focus-editor textarea:focus-visible {
+  border-color: color-mix(in srgb, currentColor 38%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 7%, transparent);
+}
+.dsh-taskify-editor-action { flex: none; }
+.dsh-taskify-focus-suggestion {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px;
+  font-size: 12px;
+}
+.dsh-taskify-focus-suggestion-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-taskify-focus-suggestion-actions {
+  display: inline-flex;
+  flex: none;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.dsh-taskify-focus-suggestion-actions > * { flex-shrink: 0; }
 .dsh-taskify-noop {
   color: color-mix(in srgb, currentColor 68%, transparent);
   font-size: 12px;
   line-height: 1.4;
+}
+@media (hover: none) {
+  .dsh-taskify-focus-actions { opacity: 1; }
+  .dsh-taskify-anchor-actions { max-width: 112px; opacity: 1; }
 }
 `;
 var taskifyRemote;
@@ -1074,7 +1546,9 @@ function TaskifyButton({ sessionId, useSession, useInput, inputActions }) {
   import_react.default.useEffect(() => {
     const turnSettled = previousRunningRef.current === true && running === false;
     previousRunningRef.current = running;
-    if (turnSettled && controller && taskifyRemote) void controller.hydrate(taskifyRemote, { quiet: true });
+    if (turnSettled && controller && taskifyRemote) {
+      void controller.hydrate(taskifyRemote, { quiet: true, applyPendingFocus: true });
+    }
   }, [controller, running, sessionId]);
   import_react.default.useEffect(() => {
     if (phase !== "plain" || suppressDraftInvalidationRef.current) return;
@@ -1142,25 +1616,21 @@ function TaskifyButton({ sessionId, useSession, useInput, inputActions }) {
     labelContent
   )), state.notice !== null && /* @__PURE__ */ import_react.default.createElement(import_dsh_client_ui_primitives.Toast, { key: state.notice.seq, text: state.notice.text, onDone: () => controller.clearNotice() }));
 }
-function TaskifyAnchors({ sessionId, input }) {
-  const state = useTaskifySession(sessionId);
-  const controller = taskifySessionFor(sessionId);
-  const hostState = state?.hostState;
-  if (!state || !hostState) return null;
-  const { persistent, pending, noop } = taskifyAnchorDockModel(hostState, input?.draft);
-  if (persistent.length === 0 && pending.length === 0 && !noop) return null;
-  const mutate = (method, anchorId) => {
-    if (!controller || !taskifyRemote) return;
-    void controller[method](anchorId, taskifyRemote);
-  };
-  return /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-anchors", "aria-label": "Taskify Session \u7EA6\u675F" }, persistent.map(({ key, anchor }) => /* @__PURE__ */ import_react.default.createElement(
-    import_dsh_client_ui_primitives.Tooltip,
+function AnchorChip({ anchor, pending = false, mutate }) {
+  const provenance = anchorProvenanceForDisplay(anchor);
+  const status = pending ? "pending" : anchor.status;
+  const chip = /* @__PURE__ */ import_react.default.createElement(
+    "span",
     {
-      key,
-      label: `\u6765\u6E90\uFF1A\u201C${anchor.evidence}\u201D \xB7 Scope: Session \xB7 Status: ${anchor.status === "active" ? "Active" : "Paused"}`,
-      side: "top"
+      className: "dsh-taskify-anchor-chip",
+      "data-status": status,
+      tabIndex: 0,
+      "aria-label": `${anchor.text}\uFF1B${pending ? "\u5F85\u53D1\u9001" : anchor.status}`
     },
-    /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-chip", "data-status": anchor.status, tabIndex: 0, "aria-label": `${anchor.text}\uFF1B${anchor.status}` }, /* @__PURE__ */ import_react.default.createElement("span", { "aria-hidden": "true" }, "\u{1F512}"), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-chip-text" }, anchor.text), /* @__PURE__ */ import_react.default.createElement(
+    /* @__PURE__ */ import_react.default.createElement("span", { "aria-hidden": "true" }, "\u{1F512}"),
+    /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-anchor-text" }, anchor.text),
+    !pending && anchor.status === "paused" && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-anchor-paused" }, "\u5DF2\u6682\u505C"),
+    !pending && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-anchor-actions" }, /* @__PURE__ */ import_react.default.createElement(
       "button",
       {
         type: "button",
@@ -1179,15 +1649,97 @@ function TaskifyAnchors({ sessionId, input }) {
       },
       "\u79FB\u9664"
     ))
-  )), pending.map(({ key, anchor }) => /* @__PURE__ */ import_react.default.createElement(
+  );
+  if (provenance === null) return chip;
+  return /* @__PURE__ */ import_react.default.createElement(
     import_dsh_client_ui_primitives.Tooltip,
     {
-      key,
-      label: `\u6765\u6E90\uFF1A\u201C${anchor.evidence}\u201D \xB7 Scope: Session \xB7 Status: Pending activation`,
+      label: /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-provenance" }, /* @__PURE__ */ import_react.default.createElement("span", null, provenance.title), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-provenance-evidence" }, "\u201C", provenance.evidence, "\u201D")),
       side: "top"
     },
-    /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-chip", "data-status": "pending", tabIndex: 0, "aria-label": `${anchor.text}\uFF1B\u5F85\u53D1\u9001\u6FC0\u6D3B` }, /* @__PURE__ */ import_react.default.createElement("span", { "aria-hidden": "true" }, "\u{1F512}"), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-chip-text" }, anchor.text), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-chip-pending" }, "\u5F85\u53D1\u9001\u6FC0\u6D3B"))
-  )), persistent.length > 0 && /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-clear", onClick: () => void controller?.clearAnchors(taskifyRemote) }, "\u6E05\u9664\u5168\u90E8"), persistent.length > 0 && hostState.runtimeContext.available === false && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-context-warning" }, "\u26A0 \u5F53\u524D\u8DE8\u8F6E\u6307\u5BFC\u4E0D\u53EF\u7528"), noop && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-noop" }, "\u2713 \u672A\u53D1\u73B0\u9700\u8981\u989D\u5916\u951A\u5B9A\u7684\u7EA6\u675F"));
+    chip
+  );
+}
+function TaskifyAnchors({ sessionId, input }) {
+  const state = useTaskifySession(sessionId);
+  const controller = taskifySessionFor(sessionId);
+  const hostState = state?.hostState;
+  const [editingFocus, setEditingFocus] = import_react.default.useState(false);
+  const [focusDraft, setFocusDraft] = import_react.default.useState("");
+  const [editingSuggestion, setEditingSuggestion] = import_react.default.useState(false);
+  const [suggestionDraft, setSuggestionDraft] = import_react.default.useState("");
+  import_react.default.useEffect(() => {
+    setEditingFocus(false);
+    setFocusDraft("");
+    setEditingSuggestion(false);
+    setSuggestionDraft("");
+  }, [sessionId]);
+  if (!state || !hostState) return null;
+  const { focus, persistent, pending, noop } = taskifyAnchorDockModel(hostState, input?.draft);
+  const pendingAcceptance = focus === null ? state.pendingFocusAcceptance : null;
+  const suggestion = focus === null && pendingAcceptance === null ? state.focusSuggestion : null;
+  const mutate = (method, anchorId) => {
+    if (!controller || !taskifyRemote) return;
+    void controller[method](anchorId, taskifyRemote);
+  };
+  const beginFocus = () => {
+    setFocusDraft(focus?.text ?? "");
+    setEditingFocus(true);
+  };
+  const saveFocus = async () => {
+    if (!controller || !taskifyRemote || focusDraft.trim() === "") return;
+    const ok = focus === null ? await controller.setFocus(focusDraft, taskifyRemote) : await controller.editFocus(focusDraft, taskifyRemote);
+    if (ok) setEditingFocus(false);
+  };
+  const acceptSuggestion = async () => {
+    const text = editingSuggestion ? suggestionDraft : suggestion;
+    if (!controller || typeof text !== "string" || text.trim() === "") return;
+    if (!taskifyRemote) {
+      controller.showNotice("Taskify Focus \u670D\u52A1\u5C1A\u672A\u5C31\u7EEA\u3002");
+      controller.emit();
+      return;
+    }
+    const ok = await controller.acceptFocusSuggestion(text, taskifyRemote);
+    if (ok) setEditingSuggestion(false);
+  };
+  const editSuggestion = () => {
+    setSuggestionDraft(suggestion ?? "");
+    setEditingSuggestion(true);
+  };
+  const ignoreSuggestion = () => {
+    setEditingSuggestion(false);
+    controller?.ignoreFocusSuggestion();
+  };
+  return /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-dock", "aria-label": "Taskify Session \u7EA6\u675F" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-focus-layer", "aria-label": "Focus" }, pendingAcceptance !== null && /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-focus-suggestion", "data-status": pendingAcceptance.status }, /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-suggestion-text" }, "\u{1F3AF} Focus: ", pendingAcceptance.text, " \xB7 ", pendingAcceptance.status === "applying" ? "\u6B63\u5728\u542F\u7528\u2026" : pendingAcceptance.status === "error" ? `\u542F\u7528\u5931\u8D25\uFF1A${pendingAcceptance.error}` : "\u5F85\u53D1\u9001\u540E\u542F\u7528"), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-suggestion-actions" }, pendingAcceptance.status === "error" && /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-chip-action", onClick: () => void controller?.retryPendingFocusAcceptance(taskifyRemote) }, "\u91CD\u8BD5"), pendingAcceptance.status !== "applying" && /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-chip-action", onClick: () => controller?.clearPendingFocusAcceptance() }, "\u53D6\u6D88"))), suggestion !== null && (editingSuggestion ? /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-focus-editor" }, /* @__PURE__ */ import_react.default.createElement(
+    "textarea",
+    {
+      value: suggestionDraft,
+      maxLength: 400,
+      rows: 1,
+      autoFocus: true,
+      onChange: (event) => setSuggestionDraft(event.target.value),
+      "aria-label": "\u7F16\u8F91\u5EFA\u8BAE Focus"
+    }
+  ), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-suggestion-actions" }, /* @__PURE__ */ import_react.default.createElement(import_dsh_client_ui_primitives.Button, { type: "button", variant: "ghost", size: "sm", className: "dsh-taskify-editor-action", disabled: suggestionDraft.trim() === "", onClick: () => void acceptSuggestion() }, "\u8BBE\u4E3A Focus"), /* @__PURE__ */ import_react.default.createElement(import_dsh_client_ui_primitives.Button, { type: "button", variant: "ghost", size: "sm", className: "dsh-taskify-editor-action", onClick: () => setEditingSuggestion(false) }, "\u53D6\u6D88"), /* @__PURE__ */ import_react.default.createElement(import_dsh_client_ui_primitives.Button, { type: "button", variant: "ghost", size: "sm", className: "dsh-taskify-editor-action", onClick: ignoreSuggestion }, "\u5FFD\u7565"))) : /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-focus-suggestion" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-suggestion-text" }, "\u{1F3AF} \u5EFA\u8BAE Focus: ", suggestion), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-suggestion-actions" }, /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-chip-action", onClick: () => void acceptSuggestion() }, "\u8BBE\u4E3A Focus"), /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-chip-action", onClick: editSuggestion }, "\u7F16\u8F91"), /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-chip-action", onClick: ignoreSuggestion }, "\u5FFD\u7565")))), editingFocus ? /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-focus-editor" }, /* @__PURE__ */ import_react.default.createElement(
+    "textarea",
+    {
+      value: focusDraft,
+      maxLength: 2e3,
+      rows: 1,
+      autoFocus: true,
+      onChange: (event) => setFocusDraft(event.target.value),
+      "aria-label": "Focus \u5185\u5BB9"
+    }
+  ), /* @__PURE__ */ import_react.default.createElement(import_dsh_client_ui_primitives.Button, { type: "button", variant: "ghost", size: "sm", className: "dsh-taskify-editor-action", disabled: focusDraft.trim() === "", onClick: () => void saveFocus() }, "\u4FDD\u5B58"), /* @__PURE__ */ import_react.default.createElement(import_dsh_client_ui_primitives.Button, { type: "button", variant: "ghost", size: "sm", className: "dsh-taskify-editor-action", onClick: () => setEditingFocus(false) }, "\u53D6\u6D88")) : focus === null && suggestion === null && pendingAcceptance === null ? /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-focus-set", onClick: beginFocus }, "\u{1F3AF} \u8BBE\u7F6E Focus") : focus !== null ? /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-focus-current", "data-status": focus.status }, /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-icon", "aria-hidden": "true" }, "\u{1F3AF}"), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-text" }, focus.text), focus.status === "paused" && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-status" }, "\u5DF2\u6682\u505C"), /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-focus-actions" }, /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-chip-action", onClick: beginFocus, "aria-label": "\u7F16\u8F91 Focus" }, "\u7F16\u8F91"), /* @__PURE__ */ import_react.default.createElement(
+    "button",
+    {
+      type: "button",
+      className: "dsh-taskify-chip-action",
+      onClick: () => void controller?.[focus.status === "active" ? "pauseFocus" : "resumeFocus"](taskifyRemote),
+      "aria-label": `${focus.status === "active" ? "\u6682\u505C" : "\u6062\u590D"} Focus`
+    },
+    focus.status === "active" ? "\u6682\u505C" : "\u6062\u590D"
+  ), /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-chip-action", onClick: () => void controller?.clearFocus(taskifyRemote), "aria-label": "\u6E05\u9664 Focus" }, "\u6E05\u9664"))) : null), (persistent.length > 0 || pending.length > 0 || noop) && /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-anchor-layer", "aria-label": "Anchors" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "dsh-taskify-anchor-list" }, persistent.map(({ key, anchor }) => /* @__PURE__ */ import_react.default.createElement(AnchorChip, { key, anchor, mutate })), pending.map(({ key, anchor }) => /* @__PURE__ */ import_react.default.createElement(AnchorChip, { key, anchor, pending: true, mutate })), pending.length > 0 && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-pending-status" }, "\xB7 \u5F85\u53D1\u9001"), persistent.length > 0 && /* @__PURE__ */ import_react.default.createElement("button", { type: "button", className: "dsh-taskify-clear", onClick: () => void controller?.clearAnchors(taskifyRemote) }, "\u6E05\u9664\u5168\u90E8"), noop && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-noop" }, "\u2713 \u672A\u53D1\u73B0\u9700\u8981\u989D\u5916\u951A\u5B9A\u7684\u7EA6\u675F"))), (persistent.length > 0 || focus !== null) && hostState.runtimeContext.available === false && /* @__PURE__ */ import_react.default.createElement("span", { className: "dsh-taskify-context-warning" }, "\u26A0 \u5F53\u524D\u8DE8\u8F6E\u6307\u5BFC\u4E0D\u53EF\u7528"));
 }
 var inject = ["slots", "remote"];
 async function apply(ctx) {

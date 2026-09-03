@@ -6,9 +6,11 @@ import { lockLiterals, makeSentinel, unlockResult, UNKNOWN_SENTINEL_RE } from '.
 
 export const COMPILER_SYSTEM_PROMPT = `You are Taskify, a constraint extractor for an AI coding agent.
 
-Analyze ONLY the text inside <current_user_draft>. Ignore all conversation history.
+Analyze ONLY <current_user_draft> and <already_represented_constraints>. Ignore all conversation history. The already represented constraints are exclusion context from the current authoritative persistent Anchors.
 
 Extract only hard boundaries the user explicitly states in this draft. A hard boundary is a clear prohibition, mandatory preservation rule, or explicit restriction such as "do not modify the backend", "keep the API unchanged", "only analyze; do not edit code", or "do not add dependencies".
+
+Return only constraints that are new and not already expressed by <already_represented_constraints>. Do not return an existing constraint again, and do not paraphrase or reword an existing constraint into a new Anchor. If every hard constraint is already represented, return an empty anchors array.
 
 Do not extract preferences, wishes, style requests, vague guidance, or softened language such as "try to", "prefer", "ideally", "if possible", "尽量", "最好", "尽可能", "感觉", or "别搞太复杂". Never strengthen modality. If the user says "最好别碰后端", do not turn it into a prohibition.
 
@@ -81,12 +83,19 @@ function evidenceHasOnlySoftContexts(sourceDraft, evidence) {
   return found
 }
 
-/** Build the only model-visible user payload: the current locked draft. */
-export function buildCompilerUserPayload({ draft }) {
+/** Build the model-visible locked draft plus authoritative exclusion texts. */
+export function buildCompilerUserPayload({ draft, existingAnchorTexts = [] }) {
   const safeDraft = typeof draft === 'string' ? draft : ''
+  const safeExistingAnchorTexts = Array.isArray(existingAnchorTexts)
+    ? existingAnchorTexts.filter(text => typeof text === 'string')
+    : []
   return `<current_user_draft>
 ${safeDraft}
 </current_user_draft>
+
+<already_represented_constraints>
+${JSON.stringify(safeExistingAnchorTexts)}
+</already_represented_constraints>
 
 Extract explicit hard constraint anchors from current_user_draft.`
 }

@@ -20,10 +20,10 @@ function activation(sessionId = 'session-1', { requestId = 'request-1', baseRevi
   return createUserMessage({ content: [{ type: 'text', text: '<content is not parsed>' }], source })
 }
 
-function control(sessionId, revision, anchors, operation) {
+function control(sessionId, revision, anchors, operation, focus = null) {
   return createUserMessage({
     content: [{ type: 'text', text: '<superseding state>' }],
-    source: createTaskifyStateUpdateSource({ sessionId, revision, anchors, operation }),
+    source: createTaskifyStateUpdateSource({ sessionId, revision, anchors, focus, operation }),
   })
 }
 
@@ -185,4 +185,16 @@ test('later activation merges exact duplicates deterministically', () => {
   assert.equal(state.revision, 6)
   assert.equal(state.anchors.length, 1)
   assert.equal(state.anchors[0].id, firstId)
+})
+
+test('replay preserves an active Focus when later Anchors are activated', () => {
+  const fx = fixture()
+  const focus = { text: '只实现 Focus v0.4', status: 'active', scope: { kind: 'session', sessionId: 'session-1' } }
+  const focusRecord = control('session-1', 1, [], { kind: 'focus-set' }, focus)
+  fx.session.append('user/message', focusRecord, { surfaceOp: 'append' })
+  consumeActivation(fx, activation('session-1', { baseRevision: 1 }))
+  const state = rebuild(fx)
+  assert.deepEqual(state.focus, focus)
+  assert.equal(state.anchors.length, 1)
+  assert.equal(state.revision, 4)
 })

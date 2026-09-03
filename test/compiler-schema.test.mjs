@@ -13,6 +13,10 @@ import {
   anchorMutationRequestSchema,
   clearAnchorsRequestSchema,
   getStateRequestSchema,
+  focusMutationRequestSchema,
+  focusSuggestionRequestSchema,
+  focusSuggestionResultSchema,
+  focusTextMutationRequestSchema,
   invalidateRequestSchema,
   invalidateResultSchema,
   taskifyStateSnapshotSchema,
@@ -56,6 +60,18 @@ test('wire schemas expose revisioned Host state without conversation context', (
   assert.deepEqual(clearAnchorsRequestSchema.parse({ sessionId: 's1', expectedRevision: 2 }), {
     sessionId: 's1', expectedRevision: 2,
   })
+  assert.deepEqual(focusTextMutationRequestSchema.parse({ sessionId: 's1', expectedRevision: 2, text: '只实现 Focus' }), {
+    sessionId: 's1', expectedRevision: 2, text: '只实现 Focus',
+  })
+  assert.deepEqual(focusMutationRequestSchema.parse({ sessionId: 's1', expectedRevision: 2 }), {
+    sessionId: 's1', expectedRevision: 2,
+  })
+  assert.deepEqual(focusSuggestionRequestSchema.parse({ requestId: 'r1', sessionId: 's1', sourceDraft: '实现 Focus' }), {
+    requestId: 'r1', sessionId: 's1', sourceDraft: '实现 Focus',
+  })
+  assert.deepEqual(focusSuggestionResultSchema.parse({ ok: true, requestId: 'r1', suggestion: null }), {
+    ok: true, requestId: 'r1', suggestion: null,
+  })
   assert.throws(() => compileRequestSchema.parse({ requestId: '', sessionId: 's1' }))
 })
 
@@ -69,6 +85,8 @@ test('state and mutation schemas strictly reject unknown fields and invalid revi
   assert.throws(() => compileRequestSchema.parse({ ...request, expectedRevision: 1.5 }), /expectedRevision/)
   assert.throws(() => invalidateRequestSchema.parse({ sessionId: 's1', expectedRevision: Number.MAX_SAFE_INTEGER + 1 }))
   assert.throws(() => getStateRequestSchema.parse({ sessionId: 's1', extra: 1 }), /unknown field/)
+  assert.throws(() => focusTextMutationRequestSchema.parse({ sessionId: 's1', expectedRevision: 0, text: ' '.repeat(3) }), /must not be empty/)
+  assert.throws(() => focusTextMutationRequestSchema.parse({ sessionId: 's1', expectedRevision: 0, text: 'x'.repeat(2001) }), /too long/)
 })
 
 test('state schema rejects fake goal availability, invalid scope, and malformed phase data', () => {
@@ -89,20 +107,33 @@ test('state schema rejects fake goal availability, invalid scope, and malformed 
     ...idle,
     unknown: true,
   }), /unknown field/)
+  assert.throws(() => taskifyStateSnapshotSchema.parse({
+    ...idle,
+    focus: { text: 'Focus', status: 'active', scope: { kind: 'session', sessionId: 'other' } },
+  }), /exact session/)
 })
 
 test('system prompt is extraction-only and permits an empty result', () => {
   assert.equal(COMPILER_SYSTEM_PROMPT.includes('constraint extractor'), true)
   assert.equal(COMPILER_SYSTEM_PROMPT.includes('Analyze ONLY'), true)
   assert.equal(COMPILER_SYSTEM_PROMPT.includes('conversation history'), true)
+  assert.equal(COMPILER_SYSTEM_PROMPT.includes('already_represented_constraints'), true)
+  assert.equal(COMPILER_SYSTEM_PROMPT.includes('Do not return an existing constraint again'), true)
   assert.equal(COMPILER_SYSTEM_PROMPT.includes('{"anchors"'), true)
   assert.equal(COMPILER_SYSTEM_PROMPT.includes('ADAPTIVE DEPTH'), false)
 })
 
-test('user payload contains only the current draft source', () => {
-  const payload = buildCompilerUserPayload({ draft: '后端别动' })
+test('user payload contains the current draft plus authoritative Anchor exclusion texts', () => {
+  const payload = buildCompilerUserPayload({ draft: '后端别动', existingAnchorTexts: ['不修改后端', '不新增依赖'] })
   assert.equal(payload.includes('<current_user_draft>\n后端别动\n</current_user_draft>'), true)
+  assert.equal(payload.includes('<already_represented_constraints>\n["不修改后端","不新增依赖"]\n</already_represented_constraints>'), true)
   assert.equal(payload.includes('conversation_context'), false)
+})
+
+test('Anchor compiler output schema remains text plus exact evidence only', () => {
+  const result = parseResult('后端别动', '{"anchors":[{"text":"不修改后端","evidence":"后端别动"}]}')
+  assert.deepEqual(Object.keys(result), ['ok', 'anchors'])
+  assert.deepEqual(Object.keys(result.anchors[0]), ['text', 'evidence'])
 })
 
 test('explicit hard constraint keeps exact provenance', () => {

@@ -1,8 +1,8 @@
-/** Dependency-free Host-authoritative Taskify request and anchor state. */
+/** Dependency-free Host-authoritative Taskify request, Focus, and anchor state. */
 
-import { MAX_PERSISTENT_ANCHORS, mergePersistentAnchors } from './lifecycle.js'
+import { MAX_FOCUS_TEXT_CHARS, MAX_PERSISTENT_ANCHORS, mergePersistentAnchors } from './lifecycle.js'
 
-export const TASKIFY_STATE_SCHEMA_VERSION = 2
+export const TASKIFY_STATE_SCHEMA_VERSION = 3
 
 const DURABILITY_STATUSES = new Set(['unavailable', 'confirmed', 'failed'])
 
@@ -57,6 +57,22 @@ function clonePersistentAnchors(anchors, sessionId) {
   })
 }
 
+function cloneFocus(focus, sessionId) {
+  if (focus === null || focus === undefined) return null
+  if (!isRecord(focus)
+    || typeof focus.text !== 'string' || focus.text.trim() === ''
+    || focus.text.length > MAX_FOCUS_TEXT_CHARS
+    || (focus.status !== 'active' && focus.status !== 'paused')
+    || !isRecord(focus.scope) || focus.scope.kind !== 'session' || focus.scope.sessionId !== sessionId) {
+    throw new TypeError('focus is invalid')
+  }
+  return {
+    text: focus.text,
+    status: focus.status,
+    scope: { kind: 'session', sessionId },
+  }
+}
+
 function cloneCarrier(carrier) {
   if (carrier === null || carrier === undefined) return null
   if (!isRecord(carrier)
@@ -75,6 +91,10 @@ function freezeSnapshot(snapshot) {
     Object.freeze(anchor)
   }
   Object.freeze(copy.anchors)
+  if (copy.focus) {
+    Object.freeze(copy.focus.scope)
+    Object.freeze(copy.focus)
+  }
   if (copy.request.pending) Object.freeze(copy.request.pending)
   if (copy.request.bundle) {
     for (const anchor of copy.request.bundle.anchors) Object.freeze(anchor)
@@ -101,6 +121,7 @@ export function createInitialTaskifyState(sessionId) {
     goalIntegration: { available: false },
     request: { phase: 'idle' },
     anchors: [],
+    focus: null,
     scope: { kind: 'session', sessionId: exactSessionId },
   })
 }
@@ -152,6 +173,7 @@ function assertSnapshotShape(snapshot, expectedSessionId) {
   }
   assertRequest(snapshot.request)
   clonePersistentAnchors(snapshot.anchors, sessionId)
+  cloneFocus(snapshot.focus, sessionId)
   return snapshot
 }
 
@@ -165,6 +187,7 @@ function nextBase(current, durabilityStatus = current.durability.status) {
     runtimeContext: { available: current.runtimeContext.available },
     goalIntegration: { available: false },
     anchors: clonePersistentAnchors(current.anchors, current.sessionId),
+    focus: cloneFocus(current.focus, current.sessionId),
     scope: { kind: 'session', sessionId: current.sessionId },
   }
 }
@@ -232,6 +255,15 @@ export function transitionTaskifyState(current, action) {
       ...base,
       request: { phase: 'idle' },
       anchors: clonePersistentAnchors(action.anchors, current.sessionId),
+    })
+  }
+
+  if (action.type === 'replace-focus') {
+    if (current.request.phase !== 'idle') throw new Error('focus lifecycle mutation requires an idle request')
+    return freezeSnapshot({
+      ...base,
+      request: { phase: 'idle' },
+      focus: cloneFocus(action.focus, current.sessionId),
     })
   }
 

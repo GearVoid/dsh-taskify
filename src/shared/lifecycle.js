@@ -1,6 +1,7 @@
-/** Deterministic persistent-anchor lifecycle helpers. */
+/** Deterministic Focus and persistent-anchor lifecycle helpers. */
 
 export const MAX_PERSISTENT_ANCHORS = 16
+export const MAX_FOCUS_TEXT_CHARS = 2_000
 
 function escapeXml(value) {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -55,23 +56,47 @@ export function renderTaskifyRuntimeContext(state, { excludeAnchors = [] } = {})
   const active = Array.isArray(state?.anchors)
     ? state.anchors.filter(anchor => anchor.status === 'active' && !excluded.has(keyOf(anchor)))
     : []
-  if (excluded.size > 0 && active.length === 0) return ''
-  const lines = active.length === 0
+  const focus = state?.focus?.status === 'active' ? state.focus : null
+  if (excluded.size > 0 && active.length === 0 && focus === null) return ''
+
+  const lines = focus === null
     ? [
-        'No Taskify constraints are currently active.',
-        'Earlier Taskify constraint notices are superseded.',
+        'No Taskify Focus is currently active.',
+        'Earlier Taskify Focus notices are superseded.',
       ]
     : [
-        'These are the current user-authorized Taskify constraints and supersede earlier Taskify constraint notices.',
+        'Current user-authorized Taskify Focus:',
+        escapeXml(focus.text),
         '',
-        ...active.map(anchor => `- ${escapeXml(anchor.text)}`),
+        'Focus policy:',
+        '- Work only within the current Focus.',
+        '- Make only changes necessary to complete it.',
+        '- Report out-of-focus issues without fixing them; ask the user to edit or pause Focus before expanding scope.',
       ]
+
+  lines.push('')
+  if (active.length === 0) {
+    lines.push(
+      'No Taskify constraints are currently active.',
+      'Earlier Taskify constraint notices are superseded.',
+    )
+  } else {
+    lines.push(
+      'These are the current user-authorized Taskify constraints and supersede earlier Taskify constraint notices.',
+      '',
+      ...active.map(anchor => `- ${escapeXml(anchor.text)}`),
+    )
+  }
   return `<taskify_current_constraints revision="${revision}">\n${lines.join('\n')}\n</taskify_current_constraints>`
 }
 
-export function buildLifecycleNotice(revision, anchors) {
+export function buildLifecycleNotice(revision, anchors, focus = null) {
   const active = anchors.filter(anchor => anchor.status === 'active')
-  const lines = active.length === 0
+  const lines = focus?.status === 'active'
+    ? ['Current active Taskify Focus:', escapeXml(focus.text)]
+    : ['Current active Taskify Focus: none.', 'Earlier Taskify Focus is no longer active.']
+  lines.push('')
+  lines.push(...(active.length === 0
     ? [
         'Current active Taskify constraints: none.',
         'Earlier Taskify constraints are no longer active.',
@@ -79,6 +104,6 @@ export function buildLifecycleNotice(revision, anchors) {
     : [
         'Current active Taskify constraints:',
         ...active.map(anchor => `- ${escapeXml(anchor.text)}`),
-      ]
+      ]))
   return `<taskify_constraint_state revision="${revision}" supersedes="earlier">\n${lines.join('\n')}\n</taskify_constraint_state>`
 }

@@ -147,3 +147,19 @@ test('empty context renderer is safe even before any activation', () => {
   assert.match(text, /revision="0"/)
   assert.match(text, /No Taskify constraints are currently active/)
 })
+
+test('runtime renders active Focus beside Anchors with exactly three generic policy rules', () => {
+  const projection = new TaskifyStateProjection()
+  const focused = projection.update('s', 0, {
+    type: 'replace-focus',
+    focus: { text: '只完成 Focus v0.4', status: 'active', scope: { kind: 'session', sessionId: 's' } },
+  }).state
+  const active = activateProjection(projection, 's')
+  const rendered = renderTaskifyRuntimeContext(active)
+  assert.match(rendered, /只完成 Focus v0\.4/)
+  assert.match(rendered, /不修改后端/)
+  const policy = rendered.split('Focus policy:\n')[1].split('\n\n')[0].split('\n')
+  assert.equal(policy.length, 3)
+  assert.deepEqual(active.focus, focused.focus)
+  assert.doesNotMatch(rendered, /refactor|fallback|dependency/i)
+})
