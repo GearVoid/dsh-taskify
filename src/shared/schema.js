@@ -1,7 +1,8 @@
 /** Strict Typert wire schemas for Host-authoritative Taskify state. */
 
 import { MAX_ANCHORS, MAX_ANCHOR_TEXT_CHARS, MAX_EVIDENCE_CHARS } from './compiler.js'
-import { MAX_PERSISTENT_ANCHORS } from './lifecycle.js'
+import { MAX_FOCUS_SUGGESTION_CHARS } from './focus-suggestion.js'
+import { MAX_FOCUS_TEXT_CHARS, MAX_PERSISTENT_ANCHORS } from './lifecycle.js'
 import { TASKIFY_STATE_SCHEMA_VERSION } from './state.js'
 
 function isRecord(value) { return typeof value === 'object' && value !== null && !Array.isArray(value) }
@@ -65,6 +66,21 @@ function parsePersistentAnchors(value, sessionId) {
   })
 }
 
+function parseFocus(value, sessionId) {
+  if (value === null) return null
+  requireRecord(value, 'state.focus')
+  requireOnlyKeys(value, ['text', 'status', 'scope'], 'state.focus')
+  const text = requireNonEmptyString(value.text, 'state.focus.text')
+  if (text.length > MAX_FOCUS_TEXT_CHARS) throw new TypeError('state.focus.text is too long')
+  if (value.status !== 'active' && value.status !== 'paused') throw new TypeError('state.focus.status is invalid')
+  requireRecord(value.scope, 'state.focus.scope')
+  requireOnlyKeys(value.scope, ['kind', 'sessionId'], 'state.focus.scope')
+  if (value.scope.kind !== 'session' || value.scope.sessionId !== sessionId) {
+    throw new TypeError('state.focus.scope must match the exact session')
+  }
+  return { text, status: value.status, scope: { kind: 'session', sessionId } }
+}
+
 function parseCarrier(value) {
   if (value === null || value === undefined) return null
   requireRecord(value, 'state.request.bundle.carrier')
@@ -124,7 +140,7 @@ export const taskifyStateSnapshotSchema = {
     requireRecord(value, 'state')
     requireOnlyKeys(value, [
       'schemaVersion', 'sessionId', 'revision', 'durability', 'runtimeContext',
-      'goalIntegration', 'request', 'anchors', 'scope',
+      'goalIntegration', 'request', 'anchors', 'focus', 'scope',
     ], 'state')
     if (value.schemaVersion !== TASKIFY_STATE_SCHEMA_VERSION) throw new TypeError('state.schemaVersion is unsupported')
     const sessionId = requireNonEmptyString(value.sessionId, 'state.sessionId')
@@ -150,6 +166,7 @@ export const taskifyStateSnapshotSchema = {
       goalIntegration: { available: false },
       request: parseRequest(value.request),
       anchors: parsePersistentAnchors(value.anchors, sessionId),
+      focus: parseFocus(value.focus, sessionId),
       scope: { kind: 'session', sessionId },
     }
   },
@@ -195,6 +212,41 @@ function parseMutationResult(value, requestId) {
 
 export const compileResultSchema = { parse(value) { return parseMutationResult(value, true) } }
 
+export const focusSuggestionRequestSchema = {
+  parse(value) {
+    requireRecord(value, 'request')
+    requireOnlyKeys(value, ['requestId', 'sessionId', 'sourceDraft'], 'request')
+    const sourceDraft = requireNonEmptyString(value.sourceDraft, 'sourceDraft')
+    if (sourceDraft.length > 32_768) throw new TypeError('sourceDraft is too long')
+    return {
+      requestId: requireNonEmptyString(value.requestId, 'requestId'),
+      sessionId: requireNonEmptyString(value.sessionId, 'sessionId'),
+      sourceDraft,
+    }
+  },
+}
+
+export const focusSuggestionResultSchema = {
+  parse(value) {
+    requireRecord(value, 'result')
+    if (typeof value.ok !== 'boolean') throw new TypeError('result.ok must be a boolean')
+    requireOnlyKeys(value, value.ok ? ['ok', 'requestId', 'suggestion'] : ['ok', 'requestId', 'error'], 'result')
+    const result = { ok: value.ok, requestId: requireNonEmptyString(value.requestId, 'requestId') }
+    if (!value.ok) {
+      result.error = parseError(value.error)
+      return result
+    }
+    if (value.suggestion !== null) {
+      const suggestion = requireNonEmptyString(value.suggestion, 'suggestion')
+      if (suggestion.length > MAX_FOCUS_SUGGESTION_CHARS) throw new TypeError('suggestion is too long')
+      result.suggestion = suggestion
+    } else {
+      result.suggestion = null
+    }
+    return result
+  },
+}
+
 export const invalidateRequestSchema = {
   parse(value) {
     requireRecord(value, 'request'); requireOnlyKeys(value, ['sessionId', 'expectedRevision'], 'request')
@@ -216,6 +268,20 @@ export const anchorMutationRequestSchema = {
 export const clearAnchorsRequestSchema = invalidateRequestSchema
 export const lifecycleMutationResultSchema = invalidateResultSchema
 
+export const focusTextMutationRequestSchema = {
+  parse(value) {
+    requireRecord(value, 'request'); requireOnlyKeys(value, ['sessionId', 'expectedRevision', 'text'], 'request')
+    const text = requireNonEmptyString(value.text, 'text')
+    if (text.length > MAX_FOCUS_TEXT_CHARS) throw new TypeError('text is too long')
+    return {
+      sessionId: requireNonEmptyString(value.sessionId, 'sessionId'),
+      expectedRevision: requireRevision(value.expectedRevision, 'expectedRevision'),
+      text,
+    }
+  },
+}
+export const focusMutationRequestSchema = invalidateRequestSchema
+
 const directRequest = (name, typeSymbol, schema) => ({ name, wire: name, source: 'json', codec: { mode: 'strict', typeSymbol, schema } })
 const result = (typeSymbol, schema) => ({ mode: 'strict', typeSymbol: `dsh-taskify#${typeSymbol}`, schema })
 const descriptor = (method, requestType, requestSchema, resultType = 'LifecycleMutationResult', resultSchema = lifecycleMutationResultSchema) => ({
@@ -230,45 +296,64 @@ const compileDescriptor = {
   ...descriptor('compile', 'CompileRequest', compileRequestSchema, 'CompileResult', compileResultSchema),
   cancellation: { parameter: 'signal' },
 }
+const suggestFocusDescriptor = {
+  ...descriptor('suggestFocus', 'FocusSuggestionRequest', focusSuggestionRequestSchema, 'FocusSuggestionResult', focusSuggestionResultSchema),
+  cancellation: { parameter: 'signal' },
+}
 const invalidateDescriptor = descriptor('invalidate', 'InvalidateRequest', invalidateRequestSchema, 'LifecycleMutationResult', invalidateResultSchema)
 const pauseDescriptor = descriptor('pauseAnchor', 'AnchorMutationRequest', anchorMutationRequestSchema)
 const resumeDescriptor = descriptor('resumeAnchor', 'AnchorMutationRequest', anchorMutationRequestSchema)
 const removeDescriptor = descriptor('removeAnchor', 'AnchorMutationRequest', anchorMutationRequestSchema)
 const clearDescriptor = descriptor('clearAnchors', 'ClearAnchorsRequest', clearAnchorsRequestSchema)
+const setFocusDescriptor = descriptor('setFocus', 'FocusTextMutationRequest', focusTextMutationRequestSchema)
+const editFocusDescriptor = descriptor('editFocus', 'FocusTextMutationRequest', focusTextMutationRequestSchema)
+const pauseFocusDescriptor = descriptor('pauseFocus', 'FocusMutationRequest', focusMutationRequestSchema)
+const resumeFocusDescriptor = descriptor('resumeFocus', 'FocusMutationRequest', focusMutationRequestSchema)
+const clearFocusDescriptor = descriptor('clearFocus', 'FocusMutationRequest', focusMutationRequestSchema)
 
 export const TYPERT_DESCRIPTORS = [
-  getStateDescriptor, compileDescriptor, invalidateDescriptor,
+  getStateDescriptor, compileDescriptor, suggestFocusDescriptor, invalidateDescriptor,
   pauseDescriptor, resumeDescriptor, removeDescriptor, clearDescriptor,
+  setFocusDescriptor, editFocusDescriptor, pauseFocusDescriptor, resumeFocusDescriptor, clearFocusDescriptor,
 ]
 export const TYPERT_REMOTE_CONTRIBUTION = { package: 'dsh-taskify', descriptors: TYPERT_DESCRIPTORS }
 
 const anchorDeclaration = 'export interface Anchor { readonly text: string; readonly evidence: string }'
 const persistentDeclaration = 'export interface PersistentAnchor extends Anchor { readonly id: string; readonly status: "active" | "paused"; readonly scope: { readonly kind: "session"; readonly sessionId: string }; readonly activatedRevision: number }'
-const snapshotDeclaration = 'export interface TaskifyStateSnapshot { readonly schemaVersion: 2; readonly sessionId: string; readonly revision: number; readonly durability: { readonly status: "unavailable" | "confirmed" | "failed" }; readonly runtimeContext: { readonly available: boolean }; readonly goalIntegration: { readonly available: false }; readonly request: { readonly phase: "idle" } | { readonly phase: "pending"; readonly pending: { readonly requestId: string; readonly boundDraft: string; readonly sourceDraft: string } } | { readonly phase: "armed"; readonly bundle: { readonly requestId: string; readonly boundDraft: string; readonly sourceDraft: string; readonly anchors: readonly Anchor[]; readonly carrier: { readonly messageId: string; readonly bundleId: string; readonly requestId: string } | null } }; readonly anchors: readonly PersistentAnchor[]; readonly scope: { readonly kind: "session"; readonly sessionId: string } }'
+const focusDeclaration = 'export interface Focus { readonly text: string; readonly status: "active" | "paused"; readonly scope: { readonly kind: "session"; readonly sessionId: string } }'
+const snapshotDeclaration = 'export interface TaskifyStateSnapshot { readonly schemaVersion: 3; readonly sessionId: string; readonly revision: number; readonly durability: { readonly status: "unavailable" | "confirmed" | "failed" }; readonly runtimeContext: { readonly available: boolean }; readonly goalIntegration: { readonly available: false }; readonly request: { readonly phase: "idle" } | { readonly phase: "pending"; readonly pending: { readonly requestId: string; readonly boundDraft: string; readonly sourceDraft: string } } | { readonly phase: "armed"; readonly bundle: { readonly requestId: string; readonly boundDraft: string; readonly sourceDraft: string; readonly anchors: readonly Anchor[]; readonly carrier: { readonly messageId: string; readonly bundleId: string; readonly requestId: string } | null } }; readonly anchors: readonly PersistentAnchor[]; readonly focus: Focus | null; readonly scope: { readonly kind: "session"; readonly sessionId: string } }'
 
 export const TYPERT_CONTRIBUTION = {
   package: 'dsh-taskify', face: 'host', schemas: [],
   model: { services: [{
     key: 'taskify', exportName: 'TaskifyService', summary: 'Taskify persistent session-constraint service.',
-    description: 'Owns revisioned session-scoped request and persistent-anchor state.', tags: [],
+    description: 'Owns revisioned session-scoped request, Focus, and persistent-anchor state.', tags: [],
     jsDoc: '/** Host-authoritative persistent Taskify state. */',
     members: [
       { kind: 'method', name: 'getState', signature: 'async getState(request: GetStateRequest): Promise<TaskifyStateSnapshot>', summary: 'Read exact-session Taskify state.', jsDoc: '/** Read exact-session Taskify state. */' },
       { kind: 'method', name: 'compile', signature: 'async compile(request: CompileRequest, signal?: AbortSignal): Promise<CompileResult>', summary: 'Extract and arm a constraint bundle.', jsDoc: '/** Extract and arm a constraint bundle. */' },
+      { kind: 'method', name: 'suggestFocus', signature: 'async suggestFocus(request: FocusSuggestionRequest, signal?: AbortSignal): Promise<FocusSuggestionResult>', summary: 'Generate a disposable Focus draft without mutating Host state.', jsDoc: '/** Suggest a non-authoritative Focus draft. */' },
       { kind: 'method', name: 'invalidate', signature: 'async invalidate(request: InvalidateRequest): Promise<LifecycleMutationResult>', summary: 'Invalidate only the pending request bundle.', jsDoc: '/** Invalidate the pending request bundle. */' },
       ...['pauseAnchor', 'resumeAnchor', 'removeAnchor', 'clearAnchors'].map(name => ({ kind: 'method', name, signature: `async ${name}(request: ${name === 'clearAnchors' ? 'ClearAnchorsRequest' : 'AnchorMutationRequest'}): Promise<LifecycleMutationResult>`, summary: `${name} through an explicit user Remote mutation.`, jsDoc: `/** Explicit user lifecycle mutation: ${name}. */` })),
+      ...['setFocus', 'editFocus'].map(name => ({ kind: 'method', name, signature: `async ${name}(request: FocusTextMutationRequest): Promise<LifecycleMutationResult>`, summary: `${name} through an explicit user Remote mutation.`, jsDoc: `/** Explicit user lifecycle mutation: ${name}. */` })),
+      ...['pauseFocus', 'resumeFocus', 'clearFocus'].map(name => ({ kind: 'method', name, signature: `async ${name}(request: FocusMutationRequest): Promise<LifecycleMutationResult>`, summary: `${name} through an explicit user Remote mutation.`, jsDoc: `/** Explicit user lifecycle mutation: ${name}. */` })),
     ],
     types: [
       { name: 'Anchor', declaration: anchorDeclaration },
       { name: 'PersistentAnchor', declaration: persistentDeclaration },
+      { name: 'Focus', declaration: focusDeclaration },
       { name: 'TaskifyStateSnapshot', declaration: snapshotDeclaration },
       { name: 'GetStateRequest', declaration: 'export interface GetStateRequest { readonly sessionId: string }' },
       { name: 'TaskifyError', declaration: 'export interface TaskifyError { readonly code: string; readonly message: string }' },
       { name: 'CompileRequest', declaration: 'export interface CompileRequest { readonly requestId: string; readonly sessionId: string; readonly expectedRevision: number; readonly rawDraft: string; readonly sourceDraft: string; readonly draft: string; readonly nonce: string; readonly literals: readonly string[] }' },
       { name: 'CompileResult', declaration: 'export type CompileResult = { readonly ok: true; readonly requestId: string; readonly state: TaskifyStateSnapshot } | { readonly ok: false; readonly requestId: string; readonly error: TaskifyError; readonly state: TaskifyStateSnapshot }' },
+      { name: 'FocusSuggestionRequest', declaration: 'export interface FocusSuggestionRequest { readonly requestId: string; readonly sessionId: string; readonly sourceDraft: string }' },
+      { name: 'FocusSuggestionResult', declaration: 'export type FocusSuggestionResult = { readonly ok: true; readonly requestId: string; readonly suggestion: string | null } | { readonly ok: false; readonly requestId: string; readonly error: TaskifyError }' },
       { name: 'InvalidateRequest', declaration: 'export interface InvalidateRequest { readonly sessionId: string; readonly expectedRevision: number }' },
       { name: 'AnchorMutationRequest', declaration: 'export interface AnchorMutationRequest extends InvalidateRequest { readonly anchorId: string }' },
       { name: 'ClearAnchorsRequest', declaration: 'export interface ClearAnchorsRequest extends InvalidateRequest {}' },
+      { name: 'FocusTextMutationRequest', declaration: 'export interface FocusTextMutationRequest extends InvalidateRequest { readonly text: string }' },
+      { name: 'FocusMutationRequest', declaration: 'export interface FocusMutationRequest extends InvalidateRequest {}' },
       { name: 'LifecycleMutationResult', declaration: 'export type LifecycleMutationResult = { readonly ok: true; readonly state: TaskifyStateSnapshot } | { readonly ok: false; readonly error: TaskifyError; readonly state: TaskifyStateSnapshot }' },
     ],
   }] },

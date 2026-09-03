@@ -6,6 +6,7 @@ import { Inbox } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { bindTaskifyInboxMessages, TaskifyService } from '../src/host/index.js'
 import { buildConstraintContract } from '../src/shared/compiler.js'
+import { FOCUS_SUGGESTION_SYSTEM_PROMPT } from '../src/shared/focus-suggestion.js'
 import { lockLiterals } from '../src/shared/literal-lock.js'
 import { rebuildTaskifyState } from '../src/shared/projection.js'
 import { TaskifyStateProjection, createInitialTaskifyState } from '../src/shared/state.js'
@@ -19,6 +20,7 @@ function notifications() {
 
 function fixture(chunks, { sessionId = 'session-1', flush = false, withAgent = true, inject } = {}) {
   let streams = 0
+  const streamOptions = []
   let flushes = 0
   const session = Session.create(SessionId(sessionId))
   const inbox = new Inbox(session, notifications())
@@ -44,7 +46,13 @@ function fixture(chunks, { sessionId = 'session-1', flush = false, withAgent = t
         return flush
       },
     },
-    llm: { async *stream() { streams += 1; yield *chunks } },
+    llm: {
+      async *stream(options) {
+        streams += 1
+        streamOptions.push(options)
+        yield *(typeof chunks === 'function' ? chunks(options, streams) : chunks)
+      },
+    },
   }
   const service = {
     ctx,
@@ -58,8 +66,9 @@ function fixture(chunks, { sessionId = 'session-1', flush = false, withAgent = t
     hydrateSession: TaskifyService.prototype.hydrateSession,
     refreshState: TaskifyService.prototype.refreshState,
     mutatePersistentAnchors: TaskifyService.prototype.mutatePersistentAnchors,
+    mutateFocus: TaskifyService.prototype.mutateFocus,
   }
-  return { service, agent, session, inbox, streams: () => streams, flushes: () => flushes }
+  return { service, agent, session, inbox, streams: () => streams, streamOptions, flushes: () => flushes }
 }
 
 function successfulChunks(anchors = [{ text: '不修改后端', evidence: '后端别动' }]) {
@@ -112,6 +121,61 @@ test('getState returns isolated initial Host snapshots', async () => {
   assert.notEqual(a, b)
 })
 
+test('Focus suggestion is independent, nullable, and never mutates Host state', async () => {
+  const fx = fixture([
+    { type: 'text-delta', text: '{"focus":"完成 Focus suggestion 与确认 UI"}' },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+  const before = fx.service.stateProjection.getState('session-1')
+  const result = await TaskifyService.prototype.suggestFocus.call(fx.service, {
+    requestId: 'suggest-1', sessionId: 'session-1', sourceDraft: '完成 Focus suggestion 与确认 UI',
+  })
+  assert.deepEqual(result, { ok: true, requestId: 'suggest-1', suggestion: '完成 Focus suggestion 与确认 UI' })
+  assert.deepEqual(fx.service.stateProjection.getState('session-1'), before)
+  assert.equal(fx.service.stateProjection.has('session-1'), false)
+  assert.equal(fx.inbox.nextStep.length, 0)
+  assert.equal(fx.session.events.length, 0)
+  assert.equal(fx.streamOptions[0].system, FOCUS_SUGGESTION_SYSTEM_PROMPT)
+})
+
+test('Focus suggestion prompt excludes Anchors already extracted by the same request', async () => {
+  const draft = '调整 dashboard 卡片布局，后端别动 stat。不要进入其他功能开发。'
+  const anchors = [
+    { text: '后端不要动 stat', evidence: '后端别动 stat' },
+    { text: '不要进入其他功能开发', evidence: '不要进入其他功能开发' },
+  ]
+  const fx = fixture(options => options.system === FOCUS_SUGGESTION_SYSTEM_PROMPT
+    ? [
+        { type: 'text-delta', text: '{"focus":"调整 dashboard 卡片布局"}' },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ]
+    : successfulChunks(anchors))
+  const compiled = await compile(fx, draft)
+  const result = await TaskifyService.prototype.suggestFocus.call(fx.service, {
+    requestId: compiled.requestId,
+    sessionId: 'session-1',
+    sourceDraft: draft,
+  })
+
+  assert.deepEqual(result, { ok: true, requestId: compiled.requestId, suggestion: '调整 dashboard 卡片布局' })
+  const payload = fx.streamOptions[1].messages[0].content[0].text
+  assert.match(payload, /"text":"后端不要动 stat","evidence":"后端别动 stat"/)
+  assert.match(payload, /"text":"不要进入其他功能开发","evidence":"不要进入其他功能开发"/)
+})
+
+test('Host skips Focus suggestion generation when a Focus already exists', async () => {
+  const fx = fixture([])
+  fx.service.stateProjection.update('session-1', 0, {
+    type: 'replace-focus',
+    focus: { text: '已有 Focus', status: 'active', scope: { kind: 'session', sessionId: 'session-1' } },
+  })
+  const result = await TaskifyService.prototype.suggestFocus.call(fx.service, {
+    requestId: 'suggest-existing', sessionId: 'session-1', sourceDraft: '另一个任务',
+  })
+  assert.deepEqual(result, { ok: true, requestId: 'suggest-existing', suggestion: null })
+  assert.equal(fx.streams(), 0)
+})
+
 test('max-tokens failure clears ephemeral pending state with monotonic revisions', async () => {
   const fx = fixture([
     { type: 'text-delta', text: '{"anchors":[' },
@@ -152,6 +216,72 @@ test('compile creates one identified Taskify carrier with exact contract and str
   assert.equal(message.source.armedRevision, 2)
   assert.deepEqual(message.source.anchors, result.state.request.bundle.anchors)
   assert.deepEqual(fx.session.events.map(event => event.type), ['agent/inbox/spliced'])
+})
+
+test('persistent A plus extracted A arms no duplicate and preserves Focus and identity', async () => {
+  const draft = '只调整仪表盘的布局和视觉'
+  const existing = {
+    id: 'existing-a', text: '只调整仪表盘的布局和视觉', evidence: '原始 evidence', status: 'paused',
+    scope: { kind: 'session', sessionId: 'session-1' }, activatedRevision: 1,
+  }
+  const focus = { text: '完成 Dashboard 收尾', status: 'active', scope: { kind: 'session', sessionId: 'session-1' } }
+  const fx = fixture(successfulChunks([{ text: existing.text, evidence: draft }]))
+  fx.service.refreshState = undefined
+  const withAnchor = fx.service.stateProjection.update('session-1', 0, {
+    type: 'replace-anchors', anchors: [existing], durabilityStatus: 'unavailable',
+  })
+  const seeded = fx.service.stateProjection.update('session-1', withAnchor.state.revision, {
+    type: 'replace-focus', focus, durabilityStatus: 'unavailable',
+  })
+
+  const result = await TaskifyService.prototype.compile.call(
+    fx.service,
+    requestFor(draft, 'duplicate-a', 'session-1', seeded.state.revision),
+  )
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.state.request.bundle.anchors, [])
+  assert.equal(result.state.request.bundle.carrier, null)
+  assert.deepEqual(result.state.anchors, [existing])
+  assert.deepEqual(result.state.focus, focus)
+  assert.equal(result.state.revision, seeded.state.revision + 2)
+  assert.equal(fx.inbox.nextStep.length, 0)
+})
+
+test('persistent A/B plus extracted B/C keeps only C pending and passes exclusions to extraction', async () => {
+  const draft = '不处理其他代码问题，不新增依赖'
+  const existing = [
+    {
+      id: 'existing-a', text: '只调整 Dashboard 的布局和视觉', evidence: '旧 evidence A', status: 'active',
+      scope: { kind: 'session', sessionId: 'session-1' }, activatedRevision: 1,
+    },
+    {
+      id: 'existing-b', text: '不处理其他代码问题', evidence: '旧 evidence B', status: 'paused',
+      scope: { kind: 'session', sessionId: 'session-1' }, activatedRevision: 1,
+    },
+  ]
+  const extracted = [
+    { text: '不处理其他代码问题', evidence: '不处理其他代码问题' },
+    { text: '不新增依赖', evidence: '不新增依赖' },
+  ]
+  const fx = fixture(successfulChunks(extracted))
+  fx.service.refreshState = undefined
+  const seeded = fx.service.stateProjection.update('session-1', 0, {
+    type: 'replace-anchors', anchors: existing, durabilityStatus: 'unavailable',
+  })
+
+  const result = await TaskifyService.prototype.compile.call(
+    fx.service,
+    requestFor(draft, 'duplicate-b-new-c', 'session-1', seeded.state.revision),
+  )
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.state.anchors, existing)
+  assert.deepEqual(result.state.request.bundle.anchors, [{ text: '不新增依赖', evidence: '不新增依赖' }])
+  assert.deepEqual(fx.inbox.nextStep[0].source.anchors, [{ text: '不新增依赖', evidence: '不新增依赖' }])
+  const payload = fx.streamOptions[0].messages[0].content[0].text
+  assert.match(payload, /<already_represented_constraints>/)
+  assert.match(payload, /\["只调整 Dashboard 的布局和视觉","不处理其他代码问题"\]/)
 })
 
 test('empty anchors preserve the STEP 1 no-op without pretending to be replayable', async () => {
@@ -477,6 +607,57 @@ test('explicit pause, resume, remove, and clear create replayable superseding sn
   assert.deepEqual(cleared.state.anchors, [])
   assert.equal(cleared.state.revision, 7)
   assert.equal(rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.events], inbox: fx.inbox }).state.revision, 7)
+})
+
+test('Focus lifecycle is Host-owned, replayable, and survives later Anchor activation', async () => {
+  const fx = fixture(successfulChunks(), { flush: true })
+  const set = await TaskifyService.prototype.setFocus.call(fx.service, {
+    sessionId: 'session-1', expectedRevision: 0, text: '只实现 Focus v0.4',
+  })
+  assert.equal(set.ok, true)
+  assert.equal(set.state.focus.status, 'active')
+  assert.equal(fx.inbox.nextStep[0].source.schemaVersion, 3)
+  assert.equal(fx.inbox.nextStep[0].source.operation.kind, 'focus-set')
+  fx.inbox.claim('next-step', 1)
+
+  const armed = await TaskifyService.prototype.compile.call(
+    fx.service,
+    requestFor('后端别动', 'request-focus-anchor', 'session-1', set.state.revision),
+  )
+  const carrier = fx.inbox.claim('next-step', 1)[0]
+  const human = createUserMessage({ content: [{ type: 'text', text: '后端别动' }], source: { kind: 'user' } })
+  await bindTaskifyInboxMessages(
+    fx.service.stateProjection, fx.service.ctx, { agent: fx.agent },
+    async () => ({ kind: 'enter', messages: [human, carrier] }),
+  )
+  fx.session.append('user/message', human, { surfaceOp: 'append' })
+  const activated = fx.service.stateProjection.getState('session-1')
+  assert.equal(armed.state.revision, 3)
+  assert.deepEqual(activated.focus, set.state.focus)
+  assert.equal(activated.anchors.length, 1)
+
+  const edited = await TaskifyService.prototype.editFocus.call(fx.service, {
+    sessionId: 'session-1', expectedRevision: 4, text: '只实现并验证 Focus v0.4',
+  })
+  assert.equal(edited.state.focus.text, '只实现并验证 Focus v0.4')
+  assert.equal(edited.state.anchors.length, 1)
+  const paused = await TaskifyService.prototype.pauseFocus.call(fx.service, {
+    sessionId: 'session-1', expectedRevision: 5,
+  })
+  assert.equal(paused.state.focus.status, 'paused')
+  const resumed = await TaskifyService.prototype.resumeFocus.call(fx.service, {
+    sessionId: 'session-1', expectedRevision: 6,
+  })
+  assert.equal(resumed.state.focus.status, 'active')
+  const cleared = await TaskifyService.prototype.clearFocus.call(fx.service, {
+    sessionId: 'session-1', expectedRevision: 7,
+  })
+  assert.equal(cleared.state.focus, null)
+  assert.equal(cleared.state.anchors.length, 1)
+  const replayed = rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.events], inbox: fx.inbox }).state
+  assert.equal(replayed.revision, 8)
+  assert.equal(replayed.focus, null)
+  assert.equal(replayed.anchors.length, 1)
 })
 
 for (const [label, flush, expected] of [

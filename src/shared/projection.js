@@ -42,6 +42,10 @@ function frozenSnapshot(snapshot) {
     Object.freeze(anchor)
   }
   Object.freeze(copy.anchors)
+  if (copy.focus) {
+    Object.freeze(copy.focus.scope)
+    Object.freeze(copy.focus)
+  }
   if (copy.request.bundle) {
     for (const anchor of copy.request.bundle.anchors) Object.freeze(anchor)
     Object.freeze(copy.request.bundle.anchors)
@@ -175,6 +179,7 @@ export function rebuildTaskifyState({ sessionId, events, inbox, durabilityStatus
   operations.sort((a, b) => a.revision - b.revision || a.key.localeCompare(b.key) || a.kind.localeCompare(b.kind))
 
   let anchors = []
+  let focus = null
   let request = { phase: 'idle' }
   let stateRevision = 0
   for (const operation of operations) {
@@ -182,6 +187,9 @@ export function rebuildTaskifyState({ sessionId, events, inbox, durabilityStatus
     try {
       if (operation.kind === 'snapshot') {
         anchors = operation.source.anchors.map(anchor => structuredClone(anchor))
+        if (operation.source.schemaVersion >= 3) {
+          focus = operation.source.focus === null ? null : structuredClone(operation.source.focus)
+        }
         request = { phase: 'idle' }
       } else if (operation.kind === 'armed') {
         const { source, messageId } = operation.record
@@ -221,6 +229,7 @@ export function rebuildTaskifyState({ sessionId, events, inbox, durabilityStatus
       runtimeContext: { available: false },
       request,
       anchors,
+      focus,
     }),
     diagnostics: Object.freeze({ ...diagnostics }),
   }

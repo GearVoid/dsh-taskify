@@ -15,13 +15,27 @@ function arm(initial, requestId = 'request-1', anchors = [{ text: '不修改后�
 test('initial domain state separates idle request from persistent anchors', () => {
   const state = createInitialTaskifyState('session-1')
   assert.deepEqual(state, {
-    schemaVersion: 2, sessionId: 'session-1', revision: 0,
+    schemaVersion: 3, sessionId: 'session-1', revision: 0,
     durability: { status: 'unavailable' }, runtimeContext: { available: false },
     goalIntegration: { available: false }, request: { phase: 'idle' }, anchors: [],
+    focus: null,
     scope: { kind: 'session', sessionId: 'session-1' },
   })
   assert.equal(Object.isFrozen(state), true)
   assert.equal(Object.isFrozen(state.anchors), true)
+})
+
+test('active Focus survives later Anchor compilation and activation intact', () => {
+  const initial = createInitialTaskifyState('s')
+  const focused = transitionTaskifyState(initial, {
+    type: 'replace-focus',
+    focus: { text: '只完成 Focus v0.4', status: 'active', scope: { kind: 'session', sessionId: 's' } },
+  })
+  const active = transitionTaskifyState(arm(focused), {
+    type: 'activate', requestId: 'request-1', bundleId: 'bundle-request-1',
+  })
+  assert.deepEqual(active.focus, focused.focus)
+  assert.equal(active.anchors.length, 1)
 })
 
 test('correct activation returns request to idle and retains persistent anchors', () => {

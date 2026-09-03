@@ -39,12 +39,28 @@ test('activation source is v2, deterministic, exact-session, and immutable', () 
 test('state-update source carries a complete authoritative anchor snapshot', () => {
   const value = createTaskifyStateUpdateSource({
     sessionId: 'session-1', revision: 4, anchors: [persistentAnchor('paused')],
+    focus: { text: '只做 Focus', status: 'active', scope: { kind: 'session', sessionId: 'session-1' } },
     operation: { kind: 'pause', targetAnchorId: persistentAnchor().id },
   })
   assert.equal(value.recordType, 'state-update')
+  assert.equal(value.schemaVersion, 3)
   assert.equal(value.recordId, `taskify-state:4:pause:${persistentAnchor().id}`)
   assert.equal(value.anchors[0].status, 'paused')
+  assert.equal(value.focus.text, '只做 Focus')
   assert.equal(Object.isFrozen(value.anchors[0].scope), true)
+  assert.equal(Object.isFrozen(value.focus.scope), true)
+})
+
+test('historical v2 state updates remain readable without a Focus field', () => {
+  const current = structuredClone(createTaskifyStateUpdateSource({
+    sessionId: 'session-1', revision: 4, anchors: [persistentAnchor('paused')], focus: null,
+    operation: { kind: 'pause', targetAnchorId: persistentAnchor().id },
+  }))
+  current.schemaVersion = 2
+  delete current.focus
+  const parsed = parseTaskifyMessageSource(current, { expectedSessionId: 'session-1' })
+  assert.equal(parsed.schemaVersion, 2)
+  assert.equal(Object.hasOwn(parsed, 'focus'), false)
 })
 
 test('unsupported source version is rejected explicitly', () => {
@@ -66,7 +82,7 @@ test('wrong exact session and wrong persistent scope are rejected', () => {
   const anchor = persistentAnchor()
   anchor.scope.sessionId = 'other-session'
   assert.throws(() => createTaskifyStateUpdateSource({
-    sessionId: 'session-1', revision: 4, anchors: [anchor], operation: { kind: 'clear' },
+    sessionId: 'session-1', revision: 4, anchors: [anchor], focus: null, operation: { kind: 'clear' },
   }), error => error.code === 'wrong-session')
 })
 

@@ -63,6 +63,24 @@ test('dock exposes same-draft armed anchors as pending without promoting them', 
   assert.equal(model.noop, false)
 })
 
+test('dock hides exact persistent/pending duplicates and keeps only genuinely new pending Anchors', () => {
+  const draft = '只调整 Dashboard 的布局和视觉，不处理其他代码问题，不新增依赖'
+  const hostState = armedState('dock-exact-dedupe', 4, draft, [
+    { text: '不处理其他代码问题', evidence: '不处理其他代码问题' },
+    { text: '不新增依赖', evidence: '不新增依赖' },
+  ])
+  hostState.anchors = persistentState('dock-exact-dedupe', 3, [
+    { id: 'existing-a', text: '只调整 Dashboard 的布局和视觉', evidence: '旧 evidence A' },
+    { id: 'existing-b', text: '不处理其他代码问题', evidence: '旧 evidence B' },
+  ]).anchors
+
+  const model = taskifyAnchorDockModel(hostState, draft)
+
+  assert.deepEqual(model.persistent.map(item => item.key), ['existing-a', 'existing-b'])
+  assert.deepEqual(model.pending.map(item => item.anchor.text), ['不新增依赖'])
+  assert.equal(model.pending.some(item => item.anchor.text === '不处理其他代码问题'), false)
+})
+
 test('dock hides stale armed results while preserving persistent anchors', () => {
   const hostState = armedState('dock-stale', 2, '旧草稿', [
     { text: '保留旧约束', evidence: '旧草稿' },
@@ -84,6 +102,14 @@ test('dock keeps an empty same-draft armed result visible as a no-op', () => {
 
   assert.deepEqual(model.pending, [])
   assert.equal(model.noop, true)
+})
+
+test('dock exposes the exact Host-owned Focus independently of Anchors', () => {
+  const hostState = idleState('dock-focus', 1)
+  hostState.focus = { text: '只实现 Focus', status: 'active', scope: { kind: 'session', sessionId: 'dock-focus' } }
+  const model = taskifyAnchorDockModel(hostState, '')
+  assert.deepEqual(model.focus, hostState.focus)
+  assert.deepEqual(model.persistent, [])
 })
 
 function createRemote(sessionId, options = {}) {
@@ -140,6 +166,26 @@ function createRemote(sessionId, options = {}) {
       remote.state = persistentState(sessionId, remote.state.revision + 1, anchors)
       return carrier({ ok: true, state: remote.state })
     }
+  }
+  for (const method of ['setFocus', 'editFocus', 'pauseFocus', 'resumeFocus', 'clearFocus']) {
+    remote[method] = async request => {
+      remote.lifecycleCalls.push({ method, request })
+      if (options[method]) return options[method](request, remote)
+      if (request.expectedRevision !== remote.state.revision) {
+        return carrier({ ok: false, error: { code: 'revision-conflict', message: 'stale' }, state: remote.state })
+      }
+      let focus = remote.state.focus === null ? null : structuredClone(remote.state.focus)
+      if (method === 'setFocus') focus = { text: request.text, status: 'active', scope: { kind: 'session', sessionId } }
+      else if (method === 'editFocus') focus.text = request.text
+      else if (method === 'pauseFocus') focus.status = 'paused'
+      else if (method === 'resumeFocus') focus.status = 'active'
+      else focus = null
+      remote.state = { ...remote.state, revision: remote.state.revision + 1, focus }
+      return carrier({ ok: true, state: remote.state })
+    }
+  }
+  if (options.suggestFocus) {
+    remote.suggestFocus = async (request, signal) => options.suggestFocus(request, signal, remote)
   }
   return remote
 }
@@ -478,5 +524,152 @@ test('lifecycle Host errors do not fake local success and stale revisions rehydr
   assert.equal(remote.getStateCalls, 2)
   assert.equal(controller.state.hostState.revision, 5)
   assert.equal(controller.state.hostState.anchors[0].status, 'paused')
+  controller.destroy()
+})
+
+test('Set, Edit, Pause, Resume, and Clear Focus accept only Host snapshots with CAS revisions', async () => {
+  const remote = createRemote('focus-client')
+  const controller = new TaskifySession('focus-client')
+  await hydrate(controller, remote)
+
+  assert.equal(await controller.setFocus('只实现 Focus', remote), true)
+  assert.equal(controller.state.hostState.focus.text, '只实现 Focus')
+  assert.equal(await controller.editFocus('只实现并验证 Focus', remote), true)
+  assert.equal(await controller.pauseFocus(remote), true)
+  assert.equal(controller.state.hostState.focus.status, 'paused')
+  assert.equal(await controller.resumeFocus(remote), true)
+  assert.equal(controller.state.hostState.focus.status, 'active')
+  assert.equal(await controller.clearFocus(remote), true)
+  assert.equal(controller.state.hostState.focus, null)
+  assert.deepEqual(remote.lifecycleCalls.map(call => [call.method, call.request.expectedRevision]), [
+    ['setFocus', 0],
+    ['editFocus', 1],
+    ['pauseFocus', 2],
+    ['resumeFocus', 3],
+    ['clearFocus', 4],
+  ])
+  controller.destroy()
+})
+
+test('armed suggestion acceptance becomes authoritative only after activation and turn-settle hydration', async () => {
+  const suggestionCalls = []
+  const remote = createRemote('focus-suggestion-client', {
+    suggestFocus(request, signal, target) {
+      suggestionCalls.push({ request, signal })
+      assert.equal(target.state.request.phase, 'armed')
+      return carrier({ ok: true, requestId: request.requestId, suggestion: '完成 Focus suggestion UI' })
+    },
+  })
+  const controller = new TaskifySession('focus-suggestion-client')
+  await hydrate(controller, remote)
+  start(controller, { draft: '完成 Focus suggestion UI', remote })
+  await tick()
+  assert.equal(suggestionCalls.length, 1)
+  assert.equal(controller.state.focusSuggestion, '完成 Focus suggestion UI')
+  assert.equal(controller.state.hostState.focus, null)
+
+  assert.equal(await controller.acceptFocusSuggestion(controller.state.focusSuggestion, remote), true)
+  assert.deepEqual(controller.state.pendingFocusAcceptance, {
+    text: '完成 Focus suggestion UI',
+    sourceDraft: '完成 Focus suggestion UI',
+    status: 'waiting',
+    error: null,
+  })
+  assert.equal(controller.state.hostState.focus, null)
+  assert.equal(remote.lifecycleCalls.length, 0)
+
+  remote.state = persistentState('focus-suggestion-client', 3, [
+    { id: 'activated', text: '完成 UI', evidence: 'Focus suggestion UI' },
+  ])
+  await controller.hydrate(remote, { quiet: true, applyPendingFocus: true })
+  assert.equal(controller.state.hostState.focus.text, '完成 Focus suggestion UI')
+  assert.equal(controller.state.hostState.focus.status, 'active')
+  assert.equal(controller.state.focusSuggestion, null)
+  assert.equal(controller.state.pendingFocusAcceptance, null)
+  assert.deepEqual(remote.lifecycleCalls.map(call => [call.method, call.request.expectedRevision]), [['setFocus', 3]])
+
+  controller.ignoreFocusSuggestion()
+  assert.equal(controller.state.focusSuggestion, null)
+  controller.destroy()
+})
+
+test('failed deferred setFocus stays explicit and retryable without faking authority', async () => {
+  let attempts = 0
+  const remote = createRemote('focus-acceptance-error', {
+    state: persistentState('focus-acceptance-error', 3, []),
+    setFocus(request, target) {
+      attempts += 1
+      if (attempts === 1) {
+        return carrier({
+          ok: false,
+          error: { code: 'revision-conflict', message: 'Focus revision changed' },
+          state: target.state,
+        })
+      }
+      target.state = {
+        ...target.state,
+        revision: target.state.revision + 1,
+        focus: { text: request.text, status: 'active', scope: { kind: 'session', sessionId: 'focus-acceptance-error' } },
+      }
+      return carrier({ ok: true, state: target.state })
+    },
+  })
+  const controller = new TaskifySession('focus-acceptance-error')
+  await hydrate(controller, remote)
+  controller.state.focusSuggestion = '完成当前任务'
+  controller.state.focusSuggestionSourceDraft = '完成当前任务'
+
+  assert.equal(await controller.acceptFocusSuggestion('完成当前任务', remote), true)
+  assert.equal(controller.state.hostState.focus, null)
+  assert.equal(controller.state.pendingFocusAcceptance.status, 'error')
+  assert.equal(controller.state.pendingFocusAcceptance.error, 'Focus revision changed')
+  assert.equal(await controller.retryPendingFocusAcceptance(remote), true)
+  assert.equal(controller.state.hostState.focus.text, '完成当前任务')
+  assert.equal(controller.state.pendingFocusAcceptance, null)
+  controller.destroy()
+})
+
+test('turn-settle hydration drops pending acceptance when Host already has Focus', async () => {
+  let setCalls = 0
+  const remote = createRemote('focus-acceptance-race', {
+    state: persistentState('focus-acceptance-race', 3, []),
+    setFocus() {
+      setCalls += 1
+      throw new Error('must not overwrite')
+    },
+  })
+  const controller = new TaskifySession('focus-acceptance-race')
+  await hydrate(controller, remote)
+  controller.state.focusSuggestion = '建议内容'
+  controller.state.focusSuggestionSourceDraft = '建议内容'
+  controller.state.hostState = armedState('focus-acceptance-race', 4, '建议内容', [])
+  await controller.acceptFocusSuggestion('建议内容', remote)
+
+  remote.state = persistentState('focus-acceptance-race', 5, [])
+  remote.state.focus = { text: '其他客户端 Focus', status: 'active', scope: { kind: 'session', sessionId: 'focus-acceptance-race' } }
+  await controller.hydrate(remote, { quiet: true, applyPendingFocus: true })
+  assert.equal(setCalls, 0)
+  assert.equal(controller.state.pendingFocusAcceptance, null)
+  assert.equal(controller.state.hostState.focus.text, '其他客户端 Focus')
+  controller.destroy()
+})
+
+test('Taskify click does not request a suggestion when Host already owns a Focus', async () => {
+  let calls = 0
+  const state = idleState('focus-suggestion-skip', 1)
+  state.focus = { text: '已有 Focus', status: 'active', scope: { kind: 'session', sessionId: 'focus-suggestion-skip' } }
+  const remote = createRemote('focus-suggestion-skip', {
+    state,
+    suggestFocus() {
+      calls += 1
+      return carrier({ ok: true, requestId: 'unused', suggestion: '不应出现' })
+    },
+  })
+  const controller = new TaskifySession('focus-suggestion-skip')
+  await hydrate(controller, remote)
+  start(controller, { draft: '另一个任务', remote })
+  await tick()
+  assert.equal(calls, 0)
+  assert.equal(controller.state.focusSuggestion, null)
   controller.destroy()
 })
