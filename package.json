@@ -1,7 +1,7 @@
 {
   "name": "dsh-taskify",
-  "version": "0.3.0",
-  "description": "Persistent Intent Anchors for DeepSeek Harness Web: host-owned, session-scoped constraints without prompt rewriting.",
+  "version": "0.4.0",
+  "description": "Task boundaries for DeepSeek Harness Web: use Focus for execution scope and Persistent Anchors for explicit constraints without rewriting prompts.",
   "type": "module",
   "main": "src/host/index.js",
   "exports": {
