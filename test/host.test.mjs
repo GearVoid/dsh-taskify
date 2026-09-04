@@ -134,7 +134,7 @@ test('Focus suggestion is independent, nullable, and never mutates Host state', 
   assert.deepEqual(fx.service.stateProjection.getState('session-1'), before)
   assert.equal(fx.service.stateProjection.has('session-1'), false)
   assert.equal(fx.inbox.nextStep.length, 0)
-  assert.equal(fx.session.events.length, 0)
+  assert.equal(fx.session.snapshotEvents().length, 0)
   assert.equal(fx.streamOptions[0].system, FOCUS_SUGGESTION_SYSTEM_PROMPT)
 })
 
@@ -215,7 +215,7 @@ test('compile creates one identified Taskify carrier with exact contract and str
   assert.equal(message.source.sessionId, 'session-1')
   assert.equal(message.source.armedRevision, 2)
   assert.deepEqual(message.source.anchors, result.state.request.bundle.anchors)
-  assert.deepEqual(fx.session.events.map(event => event.type), ['agent/inbox/spliced'])
+  assert.deepEqual(fx.session.snapshotEvents().map(event => event.type), ['agent/inbox/spliced'])
 })
 
 test('persistent A plus extracted A arms no duplicate and preserves Focus and identity', async () => {
@@ -315,7 +315,7 @@ for (const [label, flush, expected] of [
     assert.equal(result.ok, true)
     assert.equal(result.state.durability.status, expected)
     assert.equal(fx.inbox.nextStep.length, 1)
-    assert.equal(fx.session.events.length, 1)
+    assert.equal(fx.session.snapshotEvents().length, 1)
     assert.equal(fx.flushes(), 1)
   })
 }
@@ -348,7 +348,7 @@ test('invalidate removes only the exact Taskify identity, flushes, and becomes i
   assert.equal(result.state.durability.status, 'confirmed')
   assert.deepEqual(fx.inbox.nextStep.map(message => message.id), [unrelated.id])
   assert.equal(fx.inbox.nextStep.some(message => message.id === messageId), false)
-  assert.equal(fx.session.events.at(-1).data.outcome, 'canceled')
+  assert.equal(fx.session.snapshotEvents().at(-1).data.outcome, 'canceled')
 })
 
 test('wrong carrier identity cannot delete another pending message', async () => {
@@ -386,7 +386,7 @@ test('matching pre-step allows the existing carrier once without duplicate contr
   assert.equal(fx.service.stateProjection.getState('session-1').anchors.length, 1)
   assert.equal(fx.service.stateProjection.getState('session-1').durability.status, 'unavailable')
   assert.equal(
-    [...fx.session.events].filter(event => event.type === 'user/message' && event.data.id === carrier.id).length,
+    [...fx.session.snapshotEvents()].filter(event => event.type === 'user/message' && event.data.id === carrier.id).length,
     0,
   )
 
@@ -406,14 +406,14 @@ test('real rc.2 claim sequence replays an activated carrier without a loop-autho
   ]), { flush: true })
   const { message } = await activate(fx, '严禁新增任何依赖')
 
-  const taskifyMessages = [...fx.session.events]
+  const taskifyMessages = [...fx.session.snapshotEvents()]
     .filter(event => event.type === 'user/message' && event.data.id === message.id)
   assert.equal(taskifyMessages.length, 0)
   assert.equal(fx.flushes(), 1)
 
   const rebuilt = rebuildTaskifyState({
     sessionId: 'session-1',
-    events: [...fx.session.events],
+    events: [...fx.session.snapshotEvents()],
     inbox: fx.inbox,
     durabilityStatus: 'confirmed',
   }).state
@@ -587,7 +587,7 @@ test('explicit pause, resume, remove, and clear create replayable superseding sn
   assert.equal(pauseMessage.source.operation.kind, 'pause')
   assert.match(pauseMessage.content[0].text, /supersedes="earlier"/)
   assert.match(pauseMessage.content[0].text, /Current active Taskify constraints: none/)
-  assert.equal(rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.events], inbox: fx.inbox }).state.anchors[0].status, 'paused')
+  assert.equal(rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.snapshotEvents()], inbox: fx.inbox }).state.anchors[0].status, 'paused')
 
   const resumed = await TaskifyService.prototype.resumeAnchor.call(fx.service, {
     sessionId: 'session-1', expectedRevision: 4, anchorId,
@@ -606,7 +606,7 @@ test('explicit pause, resume, remove, and clear create replayable superseding sn
   })
   assert.deepEqual(cleared.state.anchors, [])
   assert.equal(cleared.state.revision, 7)
-  assert.equal(rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.events], inbox: fx.inbox }).state.revision, 7)
+  assert.equal(rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.snapshotEvents()], inbox: fx.inbox }).state.revision, 7)
 })
 
 test('Focus lifecycle is Host-owned, replayable, and survives later Anchor activation', async () => {
@@ -654,7 +654,7 @@ test('Focus lifecycle is Host-owned, replayable, and survives later Anchor activ
   })
   assert.equal(cleared.state.focus, null)
   assert.equal(cleared.state.anchors.length, 1)
-  const replayed = rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.events], inbox: fx.inbox }).state
+  const replayed = rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.snapshotEvents()], inbox: fx.inbox }).state
   assert.equal(replayed.revision, 8)
   assert.equal(replayed.focus, null)
   assert.equal(replayed.anchors.length, 1)

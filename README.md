@@ -24,7 +24,7 @@ Taskify 不改写 composer 里的原始 Prompt。它用 **🎯 Focus** 固定当
 
 **原始 Prompt 保持不变。**
 
-[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.2--rc.1-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
@@ -46,7 +46,7 @@ Anchors 从当前 Prompt 中提取用户明确说出的硬约束。每个 Anchor
 ## 安装或更新
 
 ```sh
-dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.4.0
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.4.1
 dsh web
 ```
 
@@ -141,9 +141,9 @@ Taskify 是持续的 model guidance，不是 mechanical enforcement。当前不�
 
 ## 兼容性
 
-- DeepSeek Harness 启动器：`0.1.1-rc.2`
-- DSH 核心插件 API：`0.1.0-rc.6`
-- DSH Web Client API：`0.0.1-rc.1`
+- DeepSeek Harness 启动器：`0.1.2-rc.1`
+- DSH 核心插件 API：`0.1.2-rc.1`
+- DSH Web Client API：`0.1.2-rc.1`
 - Node.js：`^22.19.0 || >=24.0.0`
 - pnpm：`11.x`（本仓库使用 `11.19.0`）
 

@@ -33,7 +33,7 @@ function fixture(sessionId = 'session-1') {
 }
 
 const rebuild = (fx, sessionId = 'session-1') => rebuildTaskifyState({
-  sessionId, events: [...fx.session.events], inbox: fx.inbox,
+  sessionId, events: [...fx.session.snapshotEvents()], inbox: fx.inbox,
 }).state
 
 function consumeActivation(fx, message) {
@@ -103,7 +103,7 @@ test('an unconsumed claim cannot bind to a matching draft after its turn ends', 
   fx.inbox.append('next-step', message)
   fx.inbox.claim('next-step', 1)
   const events = [
-    ...fx.session.events,
+    ...fx.session.snapshotEvents(),
     { type: 'turn/start', data: {} },
     { type: 'turn/end', data: {} },
     {
@@ -163,14 +163,14 @@ test('unrelated, malformed, unsupported, and wrong-session records are ignored',
   const unsupported = structuredClone(activation().source)
   unsupported.schemaVersion = 99
   fx.inbox.append('next-step', createUserMessage({ content: [{ type: 'text', text: 'future' }], source: unsupported }))
-  const rebuilt = rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.events], inbox: fx.inbox })
+  const rebuilt = rebuildTaskifyState({ sessionId: 'session-1', events: [...fx.session.snapshotEvents()], inbox: fx.inbox })
   assert.equal(rebuilt.state.revision, 0)
   assert.ok(rebuilt.diagnostics.malformed > 0)
   assert.ok(rebuilt.diagnostics.unsupported > 0)
 
   const parent = fixture('parent')
   parent.inbox.append('next-step', activation('parent'))
-  const child = rebuildTaskifyState({ sessionId: 'child', events: [...parent.session.events], inbox: parent.inbox })
+  const child = rebuildTaskifyState({ sessionId: 'child', events: [...parent.session.snapshotEvents()], inbox: parent.inbox })
   assert.equal(child.state.revision, 0)
   assert.deepEqual(child.state.anchors, [])
   assert.ok(child.diagnostics.wrongSession > 0)

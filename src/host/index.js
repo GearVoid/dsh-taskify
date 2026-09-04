@@ -273,7 +273,7 @@ export class TaskifyService extends Service {
     const sessionId = String(session.id)
     const rebuilt = rebuildTaskifyState({
       sessionId,
-      events: [...session.events],
+      events: [...session.snapshotEvents()],
       inbox,
       durabilityStatus: 'unavailable',
     }).state

@@ -2,6 +2,13 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。中文为默认发布语言，关键术语保留英文以便与 DSH API 对照。
 
+## [0.4.1] - 2026-09-04
+
+### 兼容性
+
+- 将唯一支持的 DeepSeek Harness 基线切换到 `0.1.2-rc.1`。
+- 使用新的 `Session.snapshotEvents()` replay API，并移除已废弃的 `dsh-client-runtime` 注入。
+
 ## [0.4.0] - 2026-09-03
 
 ### 新增
@@ -51,6 +58,7 @@
 
 - 首次公开发布 DSH Taskify。
 
+[0.4.1]: https://github.com/GearVoid/dsh-taskify/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/GearVoid/dsh-taskify/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/GearVoid/dsh-taskify/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GearVoid/dsh-taskify/compare/v0.1.0...v0.2.0
