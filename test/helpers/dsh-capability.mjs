@@ -65,7 +65,7 @@ function clonePayload(message) {
 }
 
 /**
- * Test-only deterministic fold over known rc.6 events. It demonstrates that a
+ * Test-only deterministic fold over known DSH events. It demonstrates that a
  * structured Taskify source survives raw history independently of the surface.
  * It is deliberately not the v0.3 domain schema.
  */

@@ -13,7 +13,7 @@ import {
   foldTaskifySourceEvents,
   isTaskifySourcedMessage,
   taskifyStructuredPayload,
-} from './helpers/rc6-capability.mjs'
+} from './helpers/dsh-capability.mjs'
 
 const projectRequire = createRequire(import.meta.url)
 const agentPeerRequire = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent/package.json'))
@@ -68,7 +68,7 @@ function makeLiveStore(id) {
   return { ctx, store, session, detach }
 }
 
-test('capability baseline resolves the audited DSH packages at rc.6', async () => {
+test('capability baseline resolves the audited DSH packages at 0.1.2-rc.1', async () => {
   const direct = [
     '@deepseek-ai/dsh-agent',
     '@deepseek-ai/dsh-agent-default-model',
@@ -82,9 +82,9 @@ test('capability baseline resolves the audited DSH packages at rc.6', async () =
     '@deepseek-ai/dsh-system-prompt',
   ]
 
-  for (const name of direct) assert.equal(await resolvedVersion(name), '0.1.0-rc.6', name)
-  for (const name of transitive) assert.equal(await resolvedVersion(name, agentPeerRequire), '0.1.0-rc.6', name)
-  assert.equal(await resolvedVersion('@deepseek-ai/cordis'), '4.0.1')
+  for (const name of direct) assert.equal(await resolvedVersion(name), '0.1.2-rc.1', name)
+  for (const name of transitive) assert.equal(await resolvedVersion(name, agentPeerRequire), '0.1.2-rc.1', name)
+  assert.equal(await resolvedVersion('@deepseek-ai/cordis'), '4.0.2')
 })
 
 test('Inbox preserves Taskify source JSON and has exact remove/replace identity semantics', () => {
@@ -101,8 +101,8 @@ test('Inbox preserves Taskify source JSON and has exact remove/replace identity 
   assert.equal(inbox.nextStep[0].id, original.id)
   assert.deepEqual(taskifyStructuredPayload(inbox.nextStep[0]), original.source.payload)
   assert.equal(Object.isFrozen(inbox.nextStep[0]), true)
-  assert.deepEqual(session.events.map(event => event.type), ['agent/inbox/spliced'])
-  assert.equal(session.events.every(event => KNOWN_SESSION_EVENT_TYPES.has(event.type)), true)
+  assert.deepEqual(session.snapshotEvents().map(event => event.type), ['agent/inbox/spliced'])
+  assert.equal(session.snapshotEvents().every(event => KNOWN_SESSION_EVENT_TYPES.has(event.type)), true)
 
   const replacement = taskifyMessage('human draft', { revision: 8 })
   assert.equal(inbox.replace(original.id, replacement), true)
@@ -114,16 +114,17 @@ test('Inbox preserves Taskify source JSON and has exact remove/replace identity 
 
   const replayedSession = Session.fromRestore(
     session.id,
-    structuredClone(session.events),
+    structuredClone(session.snapshotEvents()),
     structuredClone(session.header),
+    0,
   )
   const replayedInbox = new Inbox(replayedSession, notifications().handlers)
   assert.deepEqual(replayedInbox.nextStep.map(message => message.id), [replacement.id])
   assert.equal(replayedInbox.remove(replacement.id), true)
   assert.equal(replayedInbox.nextStep.length, 0)
   assert.equal(replayedInbox.remove(replacement.id), false)
-  assert.equal(replayedSession.events.at(-1).type, 'agent/inbox/spliced')
-  assert.equal(replayedSession.events.at(-1).data.outcome, 'canceled')
+  assert.equal(replayedSession.snapshotEvents().at(-1).type, 'agent/inbox/spliced')
+  assert.equal(replayedSession.snapshotEvents().at(-1).data.outcome, 'canceled')
 })
 
 test('raw known-event fold recovers Taskify payloads and distinguishes lifecycle operations', () => {
@@ -159,10 +160,10 @@ test('raw known-event fold recovers Taskify payloads and distinguishes lifecycle
     sourceEventSeqs: [shadowedEvent.seq],
   })
 
-  assert.equal(session.events.every(event => KNOWN_SESSION_EVENT_TYPES.has(event.type)), true)
+  assert.equal(session.snapshotEvents().every(event => KNOWN_SESSION_EVENT_TYPES.has(event.type)), true)
   assert.equal(session.deriveMessages().some(message => message.id === shadowed.id), false)
 
-  const folded = foldTaskifySourceEvents(session.events)
+  const folded = foldTaskifySourceEvents(session.snapshotEvents())
   const byId = new Map(folded.records.map(record => [record.id, record]))
   assert.deepEqual(byId.get(entered.id).payload, entered.source.payload)
   assert.equal(byId.get(entered.id).status, 'entered')
@@ -204,7 +205,7 @@ test('flush false maps to unavailable durability without disabling process-local
     const result = await classifyFlush(() => fixture.store.flush(fixture.session))
     assert.deepEqual(result, { durability: 'unavailable' })
     assert.equal(inbox.nextStep[0].id, message.id)
-    assert.equal(fixture.session.events.length, 1)
+    assert.equal(fixture.session.snapshotEvents().length, 1)
   } finally {
     fixture.detach()
   }
@@ -218,13 +219,13 @@ test('flush rejection maps to failed and does not pretend an append was rolled b
     const inbox = new Inbox(fixture.session, notifications().handlers)
     const message = taskifyMessage('already appended')
     inbox.append('next-step', message)
-    const before = fixture.session.events
+    const before = fixture.session.snapshotEvents()
 
     const result = await classifyFlush(() => fixture.store.flush(fixture.session))
     assert.equal(result.durability, 'failed')
     assert.equal(result.error, failure)
-    assert.equal(fixture.session.events.length, before.length)
-    assert.equal(fixture.session.events[0].data.inserted[0].id, message.id)
+    assert.equal(fixture.session.snapshotEvents().length, before.length)
+    assert.equal(fixture.session.snapshotEvents()[0].data.inserted[0].id, message.id)
     assert.equal(inbox.nextStep[0].id, message.id)
   } finally {
     dispose()

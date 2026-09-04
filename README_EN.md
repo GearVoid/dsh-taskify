@@ -24,7 +24,7 @@ Do not change other functionality
 
 **The original prompt stays unchanged.**
 
-[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.0--rc.6-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.2--rc.1-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
@@ -46,7 +46,7 @@ Anchors are explicit hard constraints extracted from the current prompt. Every A
 ## Install or update
 
 ```sh
-dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.4.0
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.4.1
 dsh web
 ```
 
@@ -141,9 +141,9 @@ Taskify is continuing model guidance, not mechanical enforcement. It currently d
 
 ## Compatibility
 
-- DeepSeek Harness launcher: `0.1.1-rc.2`
-- DSH core plugin API: `0.1.0-rc.6`
-- DSH Web Client API: `0.0.1-rc.1`
+- DeepSeek Harness launcher: `0.1.2-rc.1`
+- DSH core plugin API: `0.1.2-rc.1`
+- DSH Web Client API: `0.1.2-rc.1`
 - Node.js: `^22.19.0 || >=24.0.0`
 - pnpm: `11.x` (`11.19.0` in this repository)
 
