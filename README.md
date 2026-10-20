@@ -24,8 +24,8 @@ Taskify 不改写 composer 里的原始 Prompt。它用 **🎯 Focus** 固定当
 
 **原始 Prompt 保持不变。**
 
-[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.2--rc.1-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
-[![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
+[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.2.1--rc.2-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
+[![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify?include_prereleases)](https://github.com/GearVoid/dsh-taskify/releases/tag/v0.5.0-rc.1)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
 
@@ -45,8 +45,10 @@ Anchors 从当前 Prompt 中提取用户明确说出的硬约束。每个 Anchor
 
 ## 安装或更新
 
+当前适配版为 **v0.5.0-rc.1（预发布）**，目标 DSH **0.2.1-rc.2**。旧 DSH `0.1.2-rc.1` 用户请保留 Taskify `v0.4.1`。
+
 ```sh
-dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.4.1
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.5.0-rc.1
 dsh web
 ```
 
@@ -141,9 +143,10 @@ Taskify 是持续的 model guidance，不是 mechanical enforcement。当前不�
 
 ## 兼容性
 
-- DeepSeek Harness 启动器：`0.1.2-rc.1`
-- DSH 核心插件 API：`0.1.2-rc.1`
-- DSH Web Client API：`0.1.2-rc.1`
+- DeepSeek Harness 启动器：`0.2.1-rc.2`
+- DSH 核心插件 API：`0.2.1-rc.2`
+- DSH Web Client API：`0.2.1-rc.2`
+- Cordis：`4.0.5`
 - Node.js：`^22.19.0 || >=24.0.0`
 - pnpm：`11.x`（本仓库使用 `11.19.0`）
 
@@ -159,6 +162,8 @@ pnpm pack:check
 ```
 
 当前测试覆盖 Focus suggestion 与生命周期、Anchor 提取及去重、Literal preservation、Provenance、草稿竞态、Host revision、durable replay、Session 隔离、联合 runtime context，以及 turn-settled Client convergence。
+
+已在 DSH `0.2.1-rc.2` 发布包上通过 153 项测试，包括真实 AgentLoop / TypertRegistry 下的插件注册、Focus runtime context、会话隔离和销毁。Client bundle 构建与打包检查通过。完整 DSH Web UI、实际模型提取及磁盘持久化重启场景尚未端到端验证，因此本次以预发布形式提供。
 
 ## 项目结构
 

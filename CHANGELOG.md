@@ -2,6 +2,22 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。中文为默认发布语言，关键术语保留英文以便与 DSH API 对照。
 
+## [0.5.0-rc.1] - 2026-10-20
+
+### 兼容性与修复
+
+- 将 DSH 依赖与兼容性声明更新到 `0.2.1-rc.2`，Cordis 固定为 `4.0.5`，同步 lockfile。
+- 将 Host / Client Remote strict codec 迁移到 `create()` 工厂，修复新版 TypertRegistry 拒绝注册、导致插件无法加载的问题。
+- 移除旧 `agent/session-start` 监听，继续通过 `agent/created` 初始化会话状态与 runtime context。
+- 保留原有回归覆盖，将 Inbox 测试迁移到真实 AgentLoop 所拥有的实现，更新 Session replacement 的 `startSeq` / `endSeq` 字段。
+- 新增真实 AgentLoop / TypertRegistry 集成测试，覆盖插件挂载、codec 校验、Focus 注入、Session 隔离和销毁。
+
+### 验证与发布范围
+
+- 153 项测试通过；Client bundle 构建、npm 打包检查通过。
+- 本次为预发布：完整 DSH Web UI、实际模型调用和磁盘持久化重启仍需端到端验证。
+- 旧 DSH `0.1.2-rc.1` 用户继续使用 Taskify `v0.4.1`。
+
 ## [0.4.1] - 2026-09-04
 
 ### 兼容性
@@ -63,3 +79,5 @@
 [0.3.0]: https://github.com/GearVoid/dsh-taskify/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GearVoid/dsh-taskify/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/GearVoid/dsh-taskify/releases/tag/v0.1.0
+
+[0.5.0-rc.1]: https://github.com/GearVoid/dsh-taskify/compare/v0.4.1...v0.5.0-rc.1

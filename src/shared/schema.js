@@ -282,8 +282,9 @@ export const focusTextMutationRequestSchema = {
 }
 export const focusMutationRequestSchema = invalidateRequestSchema
 
-const directRequest = (name, typeSymbol, schema) => ({ name, wire: name, source: 'json', codec: { mode: 'strict', typeSymbol, schema } })
-const result = (typeSymbol, schema) => ({ mode: 'strict', typeSymbol: `dsh-taskify#${typeSymbol}`, schema })
+const strictCodec = (typeSymbol, schema) => ({ mode: 'strict', typeSymbol, create: () => schema })
+const directRequest = (name, typeSymbol, schema) => ({ name, wire: name, source: 'json', codec: strictCodec(typeSymbol, schema) })
+const result = (typeSymbol, schema) => strictCodec(`dsh-taskify#${typeSymbol}`, schema)
 const descriptor = (method, requestType, requestSchema, resultType = 'LifecycleMutationResult', resultSchema = lifecycleMutationResultSchema) => ({
   id: `dsh-taskify#taskify/${method}`,
   service: 'taskify', namespace: 'taskify', method, invocation: { kind: 'direct' },

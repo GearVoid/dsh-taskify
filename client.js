@@ -500,8 +500,9 @@ var focusTextMutationRequestSchema = {
   }
 };
 var focusMutationRequestSchema = invalidateRequestSchema;
-var directRequest = (name, typeSymbol, schema) => ({ name, wire: name, source: "json", codec: { mode: "strict", typeSymbol, schema } });
-var result = (typeSymbol, schema) => ({ mode: "strict", typeSymbol: `dsh-taskify#${typeSymbol}`, schema });
+var strictCodec = (typeSymbol, schema) => ({ mode: "strict", typeSymbol, create: () => schema });
+var directRequest = (name, typeSymbol, schema) => ({ name, wire: name, source: "json", codec: strictCodec(typeSymbol, schema) });
+var result = (typeSymbol, schema) => strictCodec(`dsh-taskify#${typeSymbol}`, schema);
 var descriptor = (method, requestType, requestSchema, resultType = "LifecycleMutationResult", resultSchema = lifecycleMutationResultSchema) => ({
   id: `dsh-taskify#taskify/${method}`,
   service: "taskify",

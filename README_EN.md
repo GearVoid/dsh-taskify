@@ -24,8 +24,8 @@ Do not change other functionality
 
 **The original prompt stays unchanged.**
 
-[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.1.2--rc.1-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
-[![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify)](https://github.com/GearVoid/dsh-taskify/releases/latest)
+[![DeepSeek Harness Core](https://img.shields.io/badge/DSH_Core-0.2.1--rc.2-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
+[![Release](https://img.shields.io/github/v/release/GearVoid/dsh-taskify?include_prereleases)](https://github.com/GearVoid/dsh-taskify/releases/tag/v0.5.0-rc.1)
 [![License](https://img.shields.io/github/license/GearVoid/dsh-taskify)](./LICENSE)
 ![Web Profile](https://img.shields.io/badge/Profile-Web-10b981)
 
@@ -45,8 +45,10 @@ Anchors are explicit hard constraints extracted from the current prompt. Every A
 
 ## Install or update
 
+The current compatibility release is **v0.5.0-rc.1 (prerelease)** for DSH **0.2.1-rc.2**. Keep Taskify `v0.4.1` if you still use DSH `0.1.2-rc.1`.
+
 ```sh
-dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.4.1
+dsh plugin --profile web add github:GearVoid/dsh-taskify#v0.5.0-rc.1
 dsh web
 ```
 
@@ -141,9 +143,10 @@ Taskify is continuing model guidance, not mechanical enforcement. It currently d
 
 ## Compatibility
 
-- DeepSeek Harness launcher: `0.1.2-rc.1`
-- DSH core plugin API: `0.1.2-rc.1`
-- DSH Web Client API: `0.1.2-rc.1`
+- DeepSeek Harness launcher: `0.2.1-rc.2`
+- DSH core plugin API: `0.2.1-rc.2`
+- DSH Web Client API: `0.2.1-rc.2`
+- Cordis: `4.0.5`
 - Node.js: `^22.19.0 || >=24.0.0`
 - pnpm: `11.x` (`11.19.0` in this repository)
 
@@ -159,6 +162,8 @@ pnpm pack:check
 ```
 
 The suite covers Focus suggestions and lifecycle controls, Anchor extraction and deduplication, literal preservation, provenance, draft races, Host revisions, durable replay, Session isolation, combined runtime context, and turn-settled Client convergence.
+
+All 153 tests pass against the published DSH `0.2.1-rc.2` packages, including plugin registration, Focus runtime context, session isolation, and teardown with the real AgentLoop / TypertRegistry. Client build and package checks pass. Full DSH Web UI flows, live model extraction, and disk persistence across restarts have not been verified end to end, so this is a prerelease.
 
 ## Project structure
 
