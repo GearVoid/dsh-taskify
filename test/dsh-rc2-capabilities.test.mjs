@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
-import { Inbox, agentEvents } from '@deepseek-ai/dsh-agent'
+import { agentEvents } from '@deepseek-ai/dsh-agent'
+import { Inbox } from './helpers/runtime.mjs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
   TASKIFY_SOURCE_KIND,
@@ -68,7 +69,7 @@ function makeLiveStore(id) {
   return { ctx, store, session, detach }
 }
 
-test('capability baseline resolves the audited DSH packages at 0.1.2-rc.1', async () => {
+test('capability baseline resolves the audited DSH packages at 0.2.1-rc.2', async () => {
   const direct = [
     '@deepseek-ai/dsh-agent',
     '@deepseek-ai/dsh-agent-default-model',
@@ -76,15 +77,14 @@ test('capability baseline resolves the audited DSH packages at 0.1.2-rc.1', asyn
     '@deepseek-ai/dsh-typert-protocol',
   ]
   const transitive = [
-    '@deepseek-ai/dsh-invariants',
     '@deepseek-ai/dsh-scope',
     '@deepseek-ai/dsh-session',
     '@deepseek-ai/dsh-system-prompt',
   ]
 
-  for (const name of direct) assert.equal(await resolvedVersion(name), '0.1.2-rc.1', name)
-  for (const name of transitive) assert.equal(await resolvedVersion(name, agentPeerRequire), '0.1.2-rc.1', name)
-  assert.equal(await resolvedVersion('@deepseek-ai/cordis'), '4.0.2')
+  for (const name of direct) assert.equal(await resolvedVersion(name), '0.2.1-rc.2', name)
+  for (const name of transitive) assert.equal(await resolvedVersion(name, agentPeerRequire), '0.2.1-rc.2', name)
+  assert.equal(await resolvedVersion('@deepseek-ai/cordis'), '4.0.5')
 })
 
 test('Inbox preserves Taskify source JSON and has exact remove/replace identity semantics', () => {
@@ -156,7 +156,7 @@ test('raw known-event fold recovers Taskify payloads and distinguishes lifecycle
     source: { kind: 'plugin', plugin: 'compaction-fixture' },
   })
   session.append('user/message', summary, {
-    surfaceOp: { op: 'replace', start: shadowedEvent.seq, end: shadowedEvent.seq },
+    surfaceOp: { op: 'replace', startSeq: shadowedEvent.seq, endSeq: shadowedEvent.seq },
     sourceEventSeqs: [shadowedEvent.seq],
   })
 

@@ -186,10 +186,6 @@ export class TaskifyService extends Service {
       this.hydrateAgent(agent)
       this.installRuntimeContext(agent)
     })
-    ctx.on('agent/session-start', ({ agent }) => {
-      this.hydrateAgent(agent)
-      this.installRuntimeContext(agent)
-    })
     ctx.on('agent/disposed', ({ agent }) => this.uninstallRuntimeContext(agent))
     ctx.on('session/event', (session, event) => {
       if (event?.type === 'agent/inbox/spliced' || event?.type === 'user/message') {

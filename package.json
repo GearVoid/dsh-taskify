@@ -1,6 +1,6 @@
 {
   "name": "dsh-taskify",
-  "version": "0.4.1",
+  "version": "0.5.0-rc.1",
   "description": "Task boundaries for DeepSeek Harness Web: use Focus for execution scope and Persistent Anchors for explicit constraints without rewriting prompts.",
   "type": "module",
   "main": "src/host/index.js",
@@ -41,17 +41,20 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-agent-default-model": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-typert-protocol": "0.1.2-rc.1"
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-default-model": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-agent-loop": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-typert-registry": "0.2.1-rc.2",
     "esbuild": "^0.25.0"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": "0.2.1-rc.2"
   },
   "packageManager": "pnpm@11.19.0",
   "license": "MIT",
