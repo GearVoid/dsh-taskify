@@ -1,6 +1,6 @@
 {
   "name": "dsh-taskify",
-  "version": "0.5.0-rc.2",
+  "version": "0.5.0",
   "description": "Task boundaries for DeepSeek Harness Web: use Focus for execution scope and Persistent Anchors for explicit constraints without rewriting prompts.",
   "type": "module",
   "main": "src/host/index.js",
