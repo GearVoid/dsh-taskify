@@ -1556,7 +1556,7 @@ function TaskifyButton({ sessionId, useSession, useInput, inputActions }) {
     if (controller?.onDraftChanged(draft) && taskifyRemote) void controller.invalidate(taskifyRemote);
   }, [controller, draft, phase, sessionId]);
   const empty = draft.trim() === "";
-  const unavailable = !input || phase === "adjudicating" || phase === "claimed" || phase === "submitting";
+  const unavailable = !input || phase !== "plain";
   const referenceBlocked = isReferenceBlocked(input?.occurrences ?? []);
   const busy = state?.status === "extracting" && !controller?.disposed;
   const remoteReady = taskifyRemote !== void 0 && state?.hostState !== null;

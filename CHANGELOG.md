@@ -2,6 +2,23 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。中文为默认发布语言，关键术语保留英文以便与 DSH API 对照。
 
+## [0.5.0-rc.2] - 2026-11-19
+
+### 兼容性
+
+- 将 DSH 依赖与兼容性声明更新到 `0.2.2-rc.1`，Cordis 跟进到 `~4.1.0`（本仓库锁定 `4.1.0`），同步 lockfile。
+- `engines.dsh` 声明为 `>=0.2.2-rc.1 <0.2.3-0`：`0.2.2-rc.1` 与 `0.2.2-rc.5` 均通过同一套 154 项测试，patch 级 rc 更新不会再被版本门槛挡住。
+- `AgentRegistry` 与 `AgentLoop` 改为在 Cordis init hook 中注册 `turnBoundary` / `modelSelection` / `inbox` 投影：测试 harness 现在手动执行同一个 init hook，`Inbox` 也改为接收投影 reader，与 0.2.2 的构造签名一致。
+- 新增真实 Cordis fiber 管道挂载用例：`TaskifyService` 通过 `ctx.plugin()` 解析全部 `inject` 依赖、注册 Typert contribution、注入 runtime context，并在销毁时注销服务。
+- Client 输入态现在按 `phase === 'plain'` 判定可用性，覆盖 0.2.2 新增的 `sending` 阶段。
+- 复核确认 0.2.2 未改变 Taskify 依赖的宿主/浏览器契约：`bindTypertRemote` 签名、strict codec 形状、`session/event` 与 `agent/created` / `agent/disposed` 载荷、`systemPrompt.context`、`conversation.input.dock` / `conversation.input.right` 槽位及其 `sessionId` / `useSession` / `useInput` / `inputActions` props、`ctx.remote.$mount`。
+
+### 验证与发布范围
+
+- 154 项测试通过；Client bundle 构建、npm 打包检查通过。
+- 本次仍为预发布：完整 DSH Web UI、实际模型调用和磁盘持久化重启仍需端到端验证。
+- 旧 DSH `0.2.1-rc.2` 用户请继续使用 Taskify `v0.5.0-rc.1`；`0.1.2-rc.1` 用户请保留 `v0.4.1`。
+
 ## [0.5.0-rc.1] - 2026-10-20
 
 ### 兼容性与修复

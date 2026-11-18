@@ -400,7 +400,7 @@ test('matching pre-step allows the existing carrier once without duplicate contr
   assert.deepEqual(second.messages, [secondHuman])
 })
 
-test('real rc.2 claim sequence replays an activated carrier without a loop-authored user message', async () => {
+test('real 0.2.2 claim sequence replays an activated carrier without a loop-authored user message', async () => {
   const fx = fixture(successfulChunks([
     { text: '严禁新增任何依赖', evidence: '严禁新增任何依赖' },
   ]), { flush: true })

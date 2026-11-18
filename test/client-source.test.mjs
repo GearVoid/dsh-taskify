@@ -107,6 +107,7 @@ test('client hydrates and invalidates through revisioned Host snapshots', () => 
   assert.equal(source.includes('if (turnSettled && controller && taskifyRemote)'), true)
   assert.equal(source.includes('if (phaseChanged && controller && taskifyRemote)'), false)
   assert.equal(source.includes("if (phase !== 'plain' || suppressDraftInvalidationRef.current) return"), true)
+  assert.equal(source.includes("const unavailable = !input || phase !== 'plain'"), true)
   assert.equal(source.includes('suppressDraftInvalidationRef.current'), true)
   assert.equal(source.includes('controller.invalidate(taskifyRemote)'), true)
   assert.equal(source.includes('const hostState = state?.hostState'), true)

@@ -1,12 +1,57 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { Service } from '@deepseek-ai/cordis'
 import { TypertRegistry } from '@deepseek-ai/dsh-typert-registry'
 import { TaskifyService } from '../src/host/index.js'
 import { TYPERT_DESCRIPTORS } from '../src/shared/schema.js'
 import { loop, runtime } from './helpers/runtime.mjs'
 
-test('rc.2 live Agent creation mounts Taskify context, isolates sessions, and tears down', async () => {
-  new TypertRegistry(runtime)
+/** Route stub: this file proves mounting and wiring, never a model call. */
+class StubLlm extends Service {
+  constructor(ctx) {
+    super(ctx, 'llm')
+  }
+
+  async *stream() {
+    throw new Error('stub route: Taskify must not reach the model in these tests')
+  }
+}
+
+/** Minimal agentDefaultModel surface; Taskify only reads `currentSelection()`. */
+class StubAgentDefaultModel extends Service {
+  constructor(ctx) {
+    super(ctx, 'agentDefaultModel')
+  }
+
+  currentSelection() {
+    return undefined
+  }
+}
+
+new TypertRegistry(runtime)
+new StubLlm(runtime)
+new StubAgentDefaultModel(runtime)
+
+test('TaskifyService mounts through the Cordis fiber pipeline on the 0.2.2 service graph', async () => {
+  const fiber = runtime.plugin(TaskifyService)
+  await fiber.await()
+  try {
+    const service = runtime.taskify
+    assert.ok(service instanceof TaskifyService)
+    const handle = await runtime.agents.create({ sessionId: 'taskify-fiber-mounted' })
+    assert.equal(service.contextRegistrations.get(handle.agent.id)?.agent, handle.agent)
+    const assembly = await runtime.systemPrompt.assemble({ scope: handle.agent })
+    assert.match(JSON.stringify(assembly.contexts), /dsh-taskify:current-constraints/)
+    await handle.dispose()
+    assert.equal(service.contextRegistrations.has(handle.agent.id), false)
+  } finally {
+    await fiber.dispose()
+  }
+  // The disposed fiber must unregister its service so a later mount starts clean.
+  assert.equal(runtime.taskify, undefined)
+})
+
+test('0.2.2 live Agent creation mounts Taskify context, isolates sessions, and tears down', async () => {
   const service = new TaskifyService(runtime)
   const handle = await runtime.agents.create({ sessionId: 'taskify-live-first' })
   const first = handle.agent

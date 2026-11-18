@@ -69,7 +69,7 @@ function makeLiveStore(id) {
   return { ctx, store, session, detach }
 }
 
-test('capability baseline resolves the audited DSH packages at 0.2.1-rc.2', async () => {
+test('capability baseline resolves one coherent 0.2.2-rc line across the audited API surface', async () => {
   const direct = [
     '@deepseek-ai/dsh-agent',
     '@deepseek-ai/dsh-agent-default-model',
@@ -82,9 +82,15 @@ test('capability baseline resolves the audited DSH packages at 0.2.1-rc.2', asyn
     '@deepseek-ai/dsh-system-prompt',
   ]
 
-  for (const name of direct) assert.equal(await resolvedVersion(name), '0.2.1-rc.2', name)
-  for (const name of transitive) assert.equal(await resolvedVersion(name, agentPeerRequire), '0.2.1-rc.2', name)
-  assert.equal(await resolvedVersion('@deepseek-ai/cordis'), '4.0.5')
+  const resolved = []
+  for (const name of direct) {
+    const version = await resolvedVersion(name)
+    assert.match(version, /^0\.2\.2-rc\.\d+$/u, name)
+    resolved.push(version)
+  }
+  assert.equal(new Set(resolved).size, 1, 'every audited DSH peer must resolve to the same exact version')
+  for (const name of transitive) assert.equal(await resolvedVersion(name, agentPeerRequire), resolved[0], name)
+  assert.equal(await resolvedVersion('@deepseek-ai/cordis'), '4.1.0')
 })
 
 test('Inbox preserves Taskify source JSON and has exact remove/replace identity semantics', () => {

@@ -64,7 +64,7 @@ test('historical activation user/message restores persistent active anchors', ()
   assert.equal(state.anchors[0].id, 'anchor:taskify:2:request-1:1')
 })
 
-test('rc.2 claimed carrier followed by its bound human draft restores persistent anchors', () => {
+test('0.2.2 claimed carrier followed by its bound human draft restores persistent anchors', () => {
   const fx = fixture()
   const message = activation()
   fx.inbox.append('next-step', message)
